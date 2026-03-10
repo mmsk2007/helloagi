@@ -1,2 +1,8 @@
 __pycache__/
 *.pyc
+_local_install/
+.venv/
+build/
+src/*.egg-info/
+helloagi.json
+memory/events.jsonl

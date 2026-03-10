@@ -2,43 +2,55 @@
 
 **Tagline:** The open AGI-agent framework for local-first intelligence, evolving character, and governed autonomy.
 
-HelloAGI is an end-to-end open-source agent framework designed to feel like the first *real* AGI runtime you can run locally:
-- It **listens and understands** context over time
-- It **develops character and purpose** from mission seeds
-- It **acts under governance**, not chaos
-- It **optimizes latency** so interaction stays fluid
+HelloAGI is an end-to-end open-source agent framework designed to run locally with real runtime components:
+- **Identity + character genesis**
+- **Governance gate** (allow/escalate/deny)
+- **Latency anticipation cache**
+- **Tool calling** (`/tool plan|summarize|reflect`)
+- **Observability journal** (`memory/events.jsonl`)
+- **Interactive CLI + autonomous mode + local API server**
 
-## What makes it different
-1. **Character Genesis Engine**
-   - Agent initializes from mission/style/domain seeds
-   - Evolves principles from interaction signals
-2. **Governed Autonomy**
-   - Runtime risk evaluation on every action
-   - allow / escalate / deny posture with deterministic policy gate
-3. **Latency Anticipation**
-   - Intent-aware precompute cache for faster responses
-4. **Framework-first architecture**
-   - Core runtime + governance + memory + adapters
-   - Designed for local installs and production extension
-
-## Quickstart
+## Install
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
+```
 
+## Quickstart
+```bash
+helloagi init
+helloagi doctor
 helloagi run --goal "Build useful intelligence that teaches and creates value"
 ```
 
-## Core modules
+## CLI commands
+```bash
+helloagi init --config helloagi.json
+helloagi doctor --config helloagi.json
+helloagi oneshot --message "help me plan a launch"
+helloagi auto --goal "ship v1" --steps 5
+helloagi serve --host 127.0.0.1 --port 8787
+```
+
+## HTTP API
+- `GET /health`
+- `POST /chat` with JSON body: `{ "message": "..." }`
+
+Example:
+```bash
+curl -s http://127.0.0.1:8787/health
+curl -s http://127.0.0.1:8787/chat -H 'content-type: application/json' -d '{"message":"help me build an agent"}'
+```
+
+## Architecture
 - `src/agi_runtime/core/` runtime and agent loop
 - `src/agi_runtime/governance/` policy + risk gate
 - `src/agi_runtime/latency/` anticipatory cache engine
 - `src/agi_runtime/memory/` identity + character genesis
-- `src/agi_runtime/adapters/` host/runtime bridges
-
-## Vision
-HelloAGI aims to make advanced agent intelligence practical for everyone: install locally, shape its mission, and build together.
+- `src/agi_runtime/tools/` local deterministic tools
+- `src/agi_runtime/api/` local HTTP server
+- `src/agi_runtime/observability/` event journal
 
 ## Safety
 HelloAGI enforces bounded autonomy and human escalation for medium/high-risk actions.
