@@ -6,3 +6,4 @@ build/
 src/*.egg-info/
 helloagi.json
 memory/events.jsonl
+memory/runtime_state.json

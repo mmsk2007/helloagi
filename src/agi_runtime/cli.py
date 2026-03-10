@@ -5,6 +5,8 @@ from agi_runtime.config.settings import load_settings, RuntimeSettings, save_set
 from agi_runtime.core.agent import HelloAGIAgent
 from agi_runtime.api.server import run_server
 from agi_runtime.autonomy.loop import AutonomousLoop
+from agi_runtime.workflows.graph import WorkflowGraph, WorkflowNode
+from agi_runtime.orchestration.orchestrator import Orchestrator
 
 
 def run(goal: str, config_path: str):
@@ -57,6 +59,21 @@ def doctor(config_path: str):
     print(f"Journal file: {s.journal_path}")
 
 
+def orchestrate_demo():
+    g = WorkflowGraph()
+    g.add_node(WorkflowNode(id="observe", title="Observe context"))
+    g.add_node(WorkflowNode(id="plan", title="Plan actions", deps=["observe"]))
+    g.add_node(WorkflowNode(id="execute", title="Execute safe actions", deps=["plan"]))
+    done = set()
+    orch = Orchestrator()
+    for _ in range(3):
+        ex = orch.run_once(g, done)
+        if not ex:
+            break
+        print("executed:", ", ".join(ex))
+    print("done:", ", ".join(sorted(done)))
+
+
 def main():
     parser = argparse.ArgumentParser(description="HelloAGI Runtime")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -84,6 +101,8 @@ def main():
     docp = sub.add_parser("doctor", help="check local runtime state")
     docp.add_argument("--config", default="helloagi.json")
 
+    sub.add_parser("orchestrate-demo", help="run orchestration DAG demo")
+
     args = parser.parse_args()
     if args.cmd == "init":
         init_config(args.config)
@@ -97,6 +116,8 @@ def main():
         run_server(args.host, args.port)
     elif args.cmd == "doctor":
         doctor(args.config)
+    elif args.cmd == "orchestrate-demo":
+        orchestrate_demo()
 
 
 if __name__ == "__main__":

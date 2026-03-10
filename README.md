@@ -8,6 +8,7 @@ HelloAGI is an end-to-end open-source agent framework designed to run locally wi
 - **Latency anticipation cache**
 - **Tool calling** (`/tool plan|summarize|reflect`)
 - **Observability journal** (`memory/events.jsonl`)
+- **Workflow orchestration skeleton** (DAG + orchestrator + event bus)
 - **Interactive CLI + autonomous mode + local API server**
 
 ## Install
@@ -31,6 +32,7 @@ helloagi doctor --config helloagi.json
 helloagi oneshot --message "help me plan a launch"
 helloagi auto --goal "ship v1" --steps 5
 helloagi serve --host 127.0.0.1 --port 8787
+helloagi orchestrate-demo
 ```
 
 ## HTTP API
