@@ -8,7 +8,8 @@ HelloAGI is an end-to-end open-source agent framework designed to run locally wi
 - **Latency anticipation cache**
 - **Tool calling** (`/tool plan|summarize|reflect`)
 - **Observability journal** (`memory/events.jsonl`)
-- **Workflow orchestration skeleton** (DAG + orchestrator + event bus)
+- **Kernel architecture skeleton** (registry, scheduler, capabilities, triggers, metering, supervisor)
+- **Workflow orchestration skeleton** (DAG + orchestrator + event bus + tri-loop)
 - **Interactive CLI + autonomous mode + local API server**
 
 ## Install
