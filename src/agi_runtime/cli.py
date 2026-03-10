@@ -9,6 +9,7 @@ from agi_runtime.workflows.graph import WorkflowGraph, WorkflowNode
 from agi_runtime.orchestration.orchestrator import Orchestrator
 from agi_runtime.orchestration.tri_loop import TriLoop
 from agi_runtime.robustness.evaluator import evaluate_consistency
+from agi_runtime.onboarding.wizard import run_wizard, status as onboard_status
 
 
 def run(goal: str, config_path: str):
@@ -122,6 +123,12 @@ def main():
     rb = sub.add_parser("benchmark-robustness", help="run noisecore robustness check")
     rb.add_argument("--text", required=True)
 
+    onboard = sub.add_parser("onboard", help="run local onboarding wizard")
+    onboard.add_argument("--path", default="helloagi.onboard.json")
+
+    obstat = sub.add_parser("onboard-status", help="show onboarding status")
+    obstat.add_argument("--path", default="helloagi.onboard.json")
+
     args = parser.parse_args()
     if args.cmd == "init":
         init_config(args.config)
@@ -141,6 +148,10 @@ def main():
         tri_loop(args.goal)
     elif args.cmd == "benchmark-robustness":
         benchmark_robustness(args.text)
+    elif args.cmd == "onboard":
+        run_wizard(args.path)
+    elif args.cmd == "onboard-status":
+        onboard_status(args.path)
 
 
 if __name__ == "__main__":

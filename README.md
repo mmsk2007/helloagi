@@ -14,10 +14,10 @@ HelloAGI is an end-to-end open-source agent framework designed to run locally wi
 
 ## Install
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
+./scripts/install.sh
 ```
+
+(If you prefer manual install, see `docs/install.md`.)
 
 ## Quickstart
 ```bash
@@ -28,6 +28,8 @@ helloagi run --goal "Build useful intelligence that teaches and creates value"
 
 ## CLI commands
 ```bash
+helloagi onboard --path helloagi.onboard.json
+helloagi onboard-status --path helloagi.onboard.json
 helloagi init --config helloagi.json
 helloagi doctor --config helloagi.json
 helloagi oneshot --message "help me plan a launch"
