@@ -34,6 +34,8 @@ helloagi init --config helloagi.json
 helloagi db-init --config helloagi.json
 helloagi db-demo --config helloagi.json
 helloagi doctor --config helloagi.json
+helloagi doctor-score --config helloagi.json --onboard helloagi.onboard.json
+helloagi replay-failure --config helloagi.json
 helloagi oneshot --message "help me plan a launch"
 helloagi auto --goal "ship v1" --steps 5
 helloagi serve --host 127.0.0.1 --port 8787

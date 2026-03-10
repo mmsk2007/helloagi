@@ -12,6 +12,8 @@ from agi_runtime.robustness.evaluator import evaluate_consistency
 from agi_runtime.onboarding.wizard import run_wizard, status as onboard_status
 from agi_runtime.storage.migrations import MigrationRunner
 from agi_runtime.storage.sqlite_store import SQLiteStore
+from agi_runtime.diagnostics.scorecard import run_scorecard
+from agi_runtime.diagnostics.replay import replay_last_failure
 
 
 def run(goal: str, config_path: str):
@@ -111,6 +113,17 @@ def db_demo(config_path: str):
     print({"session_id": sid, "tasks": tasks})
 
 
+def doctor_score(config_path: str, onboard_path: str):
+    rep = run_scorecard(config_path=config_path, onboard_path=onboard_path)
+    print(rep)
+
+
+def replay_failure(config_path: str):
+    s = load_settings(config_path)
+    rep = replay_last_failure(journal_path=s.journal_path)
+    print(rep)
+
+
 def main():
     parser = argparse.ArgumentParser(description="HelloAGI Runtime")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -157,6 +170,13 @@ def main():
     dbd = sub.add_parser("db-demo", help="run sqlite state demo")
     dbd.add_argument("--config", default="helloagi.json")
 
+    ds = sub.add_parser("doctor-score", help="readiness scorecard")
+    ds.add_argument("--config", default="helloagi.json")
+    ds.add_argument("--onboard", default="helloagi.onboard.json")
+
+    rf = sub.add_parser("replay-failure", help="replay last failure context from journal")
+    rf.add_argument("--config", default="helloagi.json")
+
     args = parser.parse_args()
     if args.cmd == "init":
         init_config(args.config)
@@ -184,6 +204,10 @@ def main():
         db_init(args.config)
     elif args.cmd == "db-demo":
         db_demo(args.config)
+    elif args.cmd == "doctor-score":
+        doctor_score(args.config, args.onboard)
+    elif args.cmd == "replay-failure":
+        replay_failure(args.config)
 
 
 if __name__ == "__main__":
