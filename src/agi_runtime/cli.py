@@ -7,6 +7,7 @@ from agi_runtime.api.server import run_server
 from agi_runtime.autonomy.loop import AutonomousLoop
 from agi_runtime.workflows.graph import WorkflowGraph, WorkflowNode
 from agi_runtime.orchestration.orchestrator import Orchestrator
+from agi_runtime.orchestration.tri_loop import TriLoop
 
 
 def run(goal: str, config_path: str):
@@ -74,6 +75,11 @@ def orchestrate_demo():
     print("done:", ", ".join(sorted(done)))
 
 
+def tri_loop(goal: str):
+    result = TriLoop().run(goal)
+    print(f"tri-loop ok={result.ok} :: {result.summary}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="HelloAGI Runtime")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -102,6 +108,8 @@ def main():
     docp.add_argument("--config", default="helloagi.json")
 
     sub.add_parser("orchestrate-demo", help="run orchestration DAG demo")
+    tri = sub.add_parser("tri-loop", help="run planner/executor/verifier loop")
+    tri.add_argument("--goal", required=True)
 
     args = parser.parse_args()
     if args.cmd == "init":
@@ -118,6 +126,8 @@ def main():
         doctor(args.config)
     elif args.cmd == "orchestrate-demo":
         orchestrate_demo()
+    elif args.cmd == "tri-loop":
+        tri_loop(args.goal)
 
 
 if __name__ == "__main__":

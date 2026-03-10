@@ -33,6 +33,7 @@ helloagi oneshot --message "help me plan a launch"
 helloagi auto --goal "ship v1" --steps 5
 helloagi serve --host 127.0.0.1 --port 8787
 helloagi orchestrate-demo
+helloagi tri-loop --goal "ship v1"
 ```
 
 ## HTTP API

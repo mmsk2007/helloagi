@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from typing import List, Literal
+from agi_runtime.policies.packs import get_pack
 
 Decision = Literal["allow", "escalate", "deny"]
 
@@ -33,8 +34,12 @@ class SRGGovernor:
     Evaluates intent/action text and returns allow/escalate/deny.
     """
 
-    def __init__(self, policy: Policy | None = None):
+    def __init__(self, policy: Policy | None = None, policy_pack: str = "safe-default"):
         self.policy = policy or Policy()
+        pack = get_pack(policy_pack)
+        if not policy:
+            self.policy.deny_keywords = pack.deny_keywords
+            self.policy.escalate_keywords = pack.escalate_keywords
 
     def evaluate(self, text: str) -> GovernanceResult:
         t = text.lower()
