@@ -31,6 +31,8 @@ helloagi run --goal "Build useful intelligence that teaches and creates value"
 helloagi onboard --path helloagi.onboard.json
 helloagi onboard-status --path helloagi.onboard.json
 helloagi init --config helloagi.json
+helloagi db-init --config helloagi.json
+helloagi db-demo --config helloagi.json
 helloagi doctor --config helloagi.json
 helloagi oneshot --message "help me plan a launch"
 helloagi auto --goal "ship v1" --steps 5

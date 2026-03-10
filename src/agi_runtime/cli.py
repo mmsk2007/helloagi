@@ -10,6 +10,8 @@ from agi_runtime.orchestration.orchestrator import Orchestrator
 from agi_runtime.orchestration.tri_loop import TriLoop
 from agi_runtime.robustness.evaluator import evaluate_consistency
 from agi_runtime.onboarding.wizard import run_wizard, status as onboard_status
+from agi_runtime.storage.migrations import MigrationRunner
+from agi_runtime.storage.sqlite_store import SQLiteStore
 
 
 def run(goal: str, config_path: str):
@@ -60,6 +62,7 @@ def doctor(config_path: str):
     s = load_settings(config_path)
     print(f"Identity file: {s.memory_path}")
     print(f"Journal file: {s.journal_path}")
+    print(f"DB file: {s.db_path}")
 
 
 def orchestrate_demo():
@@ -87,6 +90,25 @@ def benchmark_robustness(text: str):
     print(f"consistency={rep.consistency:.2f}")
     print(f"noisy={rep.noisy_text}")
     print(f"recovered={rep.recovered_text}")
+
+
+def db_init(config_path: str):
+    s = load_settings(config_path)
+    runner = MigrationRunner(db_path=s.db_path, migrations_dir="src/agi_runtime/storage/migrations")
+    runner.run()
+    print(f"db initialized: {s.db_path}")
+
+
+def db_demo(config_path: str):
+    s = load_settings(config_path)
+    runner = MigrationRunner(db_path=s.db_path, migrations_dir="src/agi_runtime/storage/migrations")
+    runner.run()
+    store = SQLiteStore(s.db_path)
+    sid = store.create_session(owner_name="demo")
+    tid = store.create_task(sid, "Ship HelloAGI")
+    store.update_task_status(tid, "done")
+    tasks = store.list_tasks(sid)
+    print({"session_id": sid, "tasks": tasks})
 
 
 def main():
@@ -129,6 +151,12 @@ def main():
     obstat = sub.add_parser("onboard-status", help="show onboarding status")
     obstat.add_argument("--path", default="helloagi.onboard.json")
 
+    dbi = sub.add_parser("db-init", help="initialize sqlite state database")
+    dbi.add_argument("--config", default="helloagi.json")
+
+    dbd = sub.add_parser("db-demo", help="run sqlite state demo")
+    dbd.add_argument("--config", default="helloagi.json")
+
     args = parser.parse_args()
     if args.cmd == "init":
         init_config(args.config)
@@ -152,6 +180,10 @@ def main():
         run_wizard(args.path)
     elif args.cmd == "onboard-status":
         onboard_status(args.path)
+    elif args.cmd == "db-init":
+        db_init(args.config)
+    elif args.cmd == "db-demo":
+        db_demo(args.config)
 
 
 if __name__ == "__main__":

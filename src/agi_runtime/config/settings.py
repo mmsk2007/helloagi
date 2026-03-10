@@ -12,6 +12,7 @@ class RuntimeSettings:
     domain_focus: str = "agents, products, automation"
     memory_path: str = "memory/identity_state.json"
     journal_path: str = "memory/events.jsonl"
+    db_path: str = "memory/helloagi.db"
 
 
 def load_settings(path: str = "helloagi.json") -> RuntimeSettings:
