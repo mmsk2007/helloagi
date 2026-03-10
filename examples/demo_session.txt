@@ -1,0 +1,2 @@
+you> help me build an autonomous growth agent
+agent[allow:0.05]> [Lana | Builder-mentor] Purpose: Help humans build safe, useful, high-impact agent systems. Plan: define objective, map constraints, execute measurable steps, verify outcomes.
