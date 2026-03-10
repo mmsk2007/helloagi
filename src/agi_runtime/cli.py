@@ -8,6 +8,7 @@ from agi_runtime.autonomy.loop import AutonomousLoop
 from agi_runtime.workflows.graph import WorkflowGraph, WorkflowNode
 from agi_runtime.orchestration.orchestrator import Orchestrator
 from agi_runtime.orchestration.tri_loop import TriLoop
+from agi_runtime.robustness.evaluator import evaluate_consistency
 
 
 def run(goal: str, config_path: str):
@@ -80,6 +81,13 @@ def tri_loop(goal: str):
     print(f"tri-loop ok={result.ok} :: {result.summary}")
 
 
+def benchmark_robustness(text: str):
+    rep = evaluate_consistency(text)
+    print(f"consistency={rep.consistency:.2f}")
+    print(f"noisy={rep.noisy_text}")
+    print(f"recovered={rep.recovered_text}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="HelloAGI Runtime")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -111,6 +119,9 @@ def main():
     tri = sub.add_parser("tri-loop", help="run planner/executor/verifier loop")
     tri.add_argument("--goal", required=True)
 
+    rb = sub.add_parser("benchmark-robustness", help="run noisecore robustness check")
+    rb.add_argument("--text", required=True)
+
     args = parser.parse_args()
     if args.cmd == "init":
         init_config(args.config)
@@ -128,6 +139,8 @@ def main():
         orchestrate_demo()
     elif args.cmd == "tri-loop":
         tri_loop(args.goal)
+    elif args.cmd == "benchmark-robustness":
+        benchmark_robustness(args.text)
 
 
 if __name__ == "__main__":

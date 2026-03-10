@@ -5,6 +5,7 @@ from agi_runtime.memory.identity import IdentityEngine
 from agi_runtime.config.settings import RuntimeSettings
 from agi_runtime.tools.registry import ToolRegistry
 from agi_runtime.observability.journal import Journal
+from agi_runtime.robustness.evaluator import evaluate_consistency
 
 
 @dataclass
@@ -54,6 +55,17 @@ class HelloAGIAgent:
         if tool_output:
             self.journal.write("tool", {"text": tool_output})
             return AgentResponse(text=tool_output, decision=gov.decision, risk=gov.risk)
+
+        if user_input.startswith('/robust '):
+            payload = user_input[len('/robust '):]
+            rep = evaluate_consistency(payload)
+            txt = (
+                f"robustness consistency={rep.consistency:.2f}\n"
+                f"noisy={rep.noisy_text}\n"
+                f"recovered={rep.recovered_text}"
+            )
+            self.journal.write("robustness", {"consistency": rep.consistency})
+            return AgentResponse(text=txt, decision=gov.decision, risk=gov.risk)
 
         cached = self.ale.get(user_input)
         if cached:
