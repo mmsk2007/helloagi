@@ -14,6 +14,7 @@ from agi_runtime.storage.migrations import MigrationRunner
 from agi_runtime.storage.sqlite_store import SQLiteStore
 from agi_runtime.diagnostics.scorecard import run_scorecard
 from agi_runtime.diagnostics.replay import replay_last_failure
+from agi_runtime.adapters.openclaw_bridge import run_openclaw_agent
 
 
 def run(goal: str, config_path: str):
@@ -124,6 +125,14 @@ def replay_failure(config_path: str):
     print(rep)
 
 
+def openclaw(prompt: str, config_path: str):
+    import anyio
+    settings = load_settings(config_path)
+    task = anyio.run(run_openclaw_agent, prompt, settings)
+    confirm_flag = "[requires-confirm]" if task.requires_human_confirm else "[auto]"
+    print(f"openclaw {confirm_flag}\n{task.summary}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="HelloAGI Runtime")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -177,6 +186,10 @@ def main():
     rf = sub.add_parser("replay-failure", help="replay last failure context from journal")
     rf.add_argument("--config", default="helloagi.json")
 
+    oc = sub.add_parser("openclaw", help="run governed openclaw agent (Claude Agent SDK)")
+    oc.add_argument("--prompt", required=True, help="prompt for the openclaw agent")
+    oc.add_argument("--config", default="helloagi.json")
+
     args = parser.parse_args()
     if args.cmd == "init":
         init_config(args.config)
@@ -208,6 +221,8 @@ def main():
         doctor_score(args.config, args.onboard)
     elif args.cmd == "replay-failure":
         replay_failure(args.config)
+    elif args.cmd == "openclaw":
+        openclaw(args.prompt, args.config)
 
 
 if __name__ == "__main__":
