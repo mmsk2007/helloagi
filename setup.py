@@ -10,6 +10,7 @@ setup(
         'anthropic',
         'claude-agent-sdk',
         'anyio',
+        'google-genai',
     ],
     entry_points={'console_scripts': ['helloagi=agi_runtime.cli:main']},
 )
