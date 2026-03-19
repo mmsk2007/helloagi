@@ -19,3 +19,6 @@
 ## LifeMaster (LMI-adjacent practical stack)
 - Real-world systems need persistence, state, and utility over demos.
 - Applied through local state files + repeatable CLI operation.
+
+## Daily learnings
+- Autonomous schedulers need dedupe/cancel/queue introspection so retries do not pile up and operators can inspect the next run cleanly.
