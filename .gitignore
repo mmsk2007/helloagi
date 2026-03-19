@@ -8,3 +8,5 @@ helloagi.json
 memory/events.jsonl
 memory/runtime_state.json
 memory/helloagi.db
+
+docs/daily-research/
