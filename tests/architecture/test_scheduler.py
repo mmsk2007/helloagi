@@ -37,6 +37,29 @@ class TestAgentScheduler(unittest.TestCase):
         self.assertEqual([item["agent_id"] for item in scheduler.pending()], ["a1"])
         self.assertAlmostEqual(scheduler.next_due_in(now=scheduler.pending()[0]["created_at"]), 10, delta=0.5)
 
+    def test_queue_summary_groups_agents_and_reasons(self):
+        scheduler = AgentScheduler()
+        first_run = scheduler.schedule_in("planner", 30, reason="heartbeat", dedupe=False)
+        scheduler.schedule_in("planner", 60, reason="retry", dedupe=False)
+        scheduler.schedule_in("worker", 45)
+
+        summary = scheduler.queue_summary(now=first_run - 5)
+
+        self.assertEqual(summary["total"], 3)
+        self.assertAlmostEqual(summary["next_due_in"], 5, delta=0.5)
+        self.assertEqual(summary["next_run_at"], first_run)
+        self.assertEqual(summary["agents"], {"planner": 2, "worker": 1})
+        self.assertEqual(summary["reasons"], {"heartbeat": 1, "retry": 1, "unspecified": 1})
+
+    def test_queue_summary_handles_empty_queue(self):
+        summary = AgentScheduler().queue_summary(now=123.0)
+
+        self.assertEqual(summary["total"], 0)
+        self.assertIsNone(summary["next_due_in"])
+        self.assertIsNone(summary["next_run_at"])
+        self.assertEqual(summary["agents"], {})
+        self.assertEqual(summary["reasons"], {})
+
 
 if __name__ == "__main__":
     unittest.main()

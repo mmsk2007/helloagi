@@ -24,3 +24,4 @@
 - Autonomous schedulers need dedupe/cancel/queue introspection so retries do not pile up and operators can inspect the next run cleanly.
 - Failure replay tooling should preserve line numbers, skip malformed journal entries safely, and surface the last triggering input for faster operator debugging.
 - Governance layers should treat prompt-injection and hidden-instruction exfiltration attempts as first-class runtime risks, not just generic unsafe text.
+- Scheduler runtimes should expose a compact queue summary (next run, agent counts, reason counts) so operators can spot retry storms and backlog shape without reading raw queue entries.

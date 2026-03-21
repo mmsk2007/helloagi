@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 import time
 
@@ -42,3 +43,26 @@ class AgentScheduler:
             return None
         now = time.time() if now is None else now
         return max(0.0, self.queue[0].run_at - now)
+
+    def queue_summary(self, now: float | None = None) -> dict:
+        now = time.time() if now is None else now
+        pending = sorted(self.queue, key=lambda item: item.run_at)
+        if not pending:
+            return {
+                "total": 0,
+                "next_due_in": None,
+                "next_run_at": None,
+                "agents": {},
+                "reasons": {},
+            }
+
+        agent_counts = Counter(item.agent_id for item in pending)
+        reason_counts = Counter(item.reason or "unspecified" for item in pending)
+        next_item = pending[0]
+        return {
+            "total": len(pending),
+            "next_due_in": max(0.0, next_item.run_at - now),
+            "next_run_at": next_item.run_at,
+            "agents": dict(sorted(agent_counts.items())),
+            "reasons": dict(sorted(reason_counts.items())),
+        }
