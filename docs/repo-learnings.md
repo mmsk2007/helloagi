@@ -25,3 +25,4 @@
 - Failure replay tooling should preserve line numbers, skip malformed journal entries safely, and surface the last triggering input for faster operator debugging.
 - Governance layers should treat prompt-injection and hidden-instruction exfiltration attempts as first-class runtime risks, not just generic unsafe text.
 - Scheduler runtimes should expose a compact queue summary (next run, agent counts, reason counts) so operators can spot retry storms and backlog shape without reading raw queue entries.
+- Runtime scorecards should inspect journal freshness, parse health, and recent failure pressure, not just file existence, so operators can catch stale or partially broken autonomy loops early.

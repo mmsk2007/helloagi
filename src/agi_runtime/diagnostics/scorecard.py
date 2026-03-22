@@ -2,6 +2,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 import json
 import sqlite3
+import time
 
 
 @dataclass
@@ -38,6 +39,59 @@ def _check_db(db_path: str) -> Check:
         return Check("database", False, f"db check failed: {e}")
 
 
+def _check_journal_health(journal_path: str) -> Check:
+    p = Path(journal_path)
+    if not p.exists():
+        return Check("journal", False, f"missing: {journal_path}")
+
+    raw_lines = [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    if not raw_lines:
+        return Check("journal", False, "journal exists but has no events")
+
+    parsed_events: list[dict] = []
+    skipped_lines = 0
+    for line_no, raw in enumerate(raw_lines, start=1):
+        try:
+            event = json.loads(raw)
+            if isinstance(event, dict):
+                event.setdefault("_line", line_no)
+                parsed_events.append(event)
+            else:
+                skipped_lines += 1
+        except Exception:
+            skipped_lines += 1
+
+    if not parsed_events:
+        return Check("journal", False, f"journal unreadable: {skipped_lines} invalid lines")
+
+    latest_ts = None
+    for event in reversed(parsed_events):
+        ts = event.get("ts")
+        if isinstance(ts, (int, float)):
+            latest_ts = float(ts)
+            break
+
+    failure_events = sum(1 for event in parsed_events if event.get("kind") in {"deny", "failure"})
+    detail_parts = [
+        f"events={len(parsed_events)}",
+        f"invalid_lines={skipped_lines}",
+        f"failures={failure_events}",
+    ]
+
+    ok = skipped_lines == 0
+    if latest_ts is not None:
+        age_seconds = max(0.0, time.time() - latest_ts)
+        detail_parts.append(f"last_event_age_s={int(age_seconds)}")
+        if age_seconds > 24 * 60 * 60:
+            ok = False
+            detail_parts.append("stale")
+    else:
+        ok = False
+        detail_parts.append("missing_ts")
+
+    return Check("journal", ok, ", ".join(detail_parts))
+
+
 def run_scorecard(config_path: str = "helloagi.json", onboard_path: str = "helloagi.onboard.json") -> dict:
     checks: list[Check] = []
 
@@ -55,9 +109,7 @@ def run_scorecard(config_path: str = "helloagi.json", onboard_path: str = "hello
     checks.append(Check("onboarding", onboard is not None, "ok" if onboard else f"missing: {onboard_path}"))
 
     checks.append(_check_db(db_path))
-
-    j = Path(journal_path)
-    checks.append(Check("journal", j.exists(), "ok" if j.exists() else f"missing: {journal_path}"))
+    checks.append(_check_journal_health(journal_path))
 
     passed = sum(1 for c in checks if c.ok)
     total = len(checks)
