@@ -1,6 +1,7 @@
 from dataclasses import dataclass, asdict
 from pathlib import Path
 import json
+import os
 import sqlite3
 import time
 
@@ -92,6 +93,35 @@ def _check_journal_health(journal_path: str) -> Check:
     return Check("journal", ok, ", ".join(detail_parts))
 
 
+def _check_provider_readiness(onboard: dict | None) -> Check:
+    provider_keys = {
+        "openai": "OPENAI_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+        "google": "GOOGLE_API_KEY",
+    }
+    providers = onboard.get("providers", {}) if isinstance(onboard, dict) else {}
+
+    configured = sorted(
+        provider
+        for provider, env_name in provider_keys.items()
+        if isinstance(providers, dict) and providers.get(f"{provider}_api_key")
+    )
+    env_ready = sorted(provider for provider, env_name in provider_keys.items() if os.environ.get(env_name))
+
+    available = sorted(set(configured) | set(env_ready))
+    runtime_backbone_ready = "anthropic" in env_ready
+
+    detail_parts = [
+        "available=" + (", ".join(available) if available else "none"),
+        "configured=" + (", ".join(configured) if configured else "none"),
+        "env=" + (", ".join(env_ready) if env_ready else "none"),
+        "runtime_backbone=" + ("anthropic-ready" if runtime_backbone_ready else "anthropic-missing"),
+    ]
+
+    ok = bool(available)
+    return Check("providers", ok, ", ".join(detail_parts))
+
+
 def run_scorecard(config_path: str = "helloagi.json", onboard_path: str = "helloagi.onboard.json") -> dict:
     checks: list[Check] = []
 
@@ -110,6 +140,7 @@ def run_scorecard(config_path: str = "helloagi.json", onboard_path: str = "hello
 
     checks.append(_check_db(db_path))
     checks.append(_check_journal_health(journal_path))
+    checks.append(_check_provider_readiness(onboard))
 
     passed = sum(1 for c in checks if c.ok)
     total = len(checks)
