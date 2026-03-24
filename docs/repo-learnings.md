@@ -27,3 +27,4 @@
 - Scheduler runtimes should expose a compact queue summary (next run, agent counts, reason counts) so operators can spot retry storms and backlog shape without reading raw queue entries.
 - Runtime scorecards should inspect journal freshness, parse health, and recent failure pressure, not just file existence, so operators can catch stale or partially broken autonomy loops early.
 - Operator diagnostics should surface which LLM providers are actually configured and whether the active runtime backbone is ready, so model/setup failures are obvious before a run breaks.
+- Orchestrators should record deferred-ready backlog and emit explicit throttling events so operators can spot max-parallel bottlenecks before autonomy quietly slows down.
