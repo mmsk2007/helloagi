@@ -5,9 +5,9 @@ Thanks for your interest in contributing to HelloAGI. This guide covers everythi
 ## Development Setup
 
 ```bash
-git clone https://github.com/user/helloagi.git
+git clone https://github.com/mmsk2007/helloagi.git
 cd helloagi
-pip install -e .
+pip install -e ".[dev]"
 ```
 
 ## Running Tests
@@ -52,9 +52,10 @@ All changes must pass the existing test suite before merging.
 
 Policy packs live in `src/agi_runtime/policies/packs.py`. To add a new pack:
 
-1. Add a new entry to the `PACKS` dict with `deny_keywords` and `escalate_keywords`
-2. Add a test in `tests/test_policy_packs.py`
-3. Document the pack's use case in your PR
+1. Define a new `PolicyPack` instance with `deny_keywords` and `escalate_keywords`
+2. Register it in the `get_pack()` function
+3. Add a test in `tests/test_policy_packs.py`
+4. Document the pack's use case in your PR
 
 ### New Tools
 
@@ -80,6 +81,7 @@ HelloAGI enforces governance on every action. When adding features:
 - Consider whether your feature needs deny/escalate keywords in policy packs
 - Journal all significant events via the observability layer
 - Test governance behavior (allow/escalate/deny) for your feature
+- See [docs/srg-integration.md](docs/srg-integration.md) for the full SRG integration guide
 
 ## Questions?
 

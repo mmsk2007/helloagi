@@ -8,56 +8,52 @@
 
 ---
 
-## Option A: Quick Install (recommended)
-
-The install script handles everything — dependency installation, config initialization, and health checks:
+## Option A: One-Liner Install (recommended)
 
 ```bash
-git clone https://github.com/user/helloagi.git
+pip install helloagi
+helloagi onboard
+```
+
+This installs the `helloagi` CLI command globally and launches the interactive onboarding wizard.
+
+## Option B: Install from Source
+
+```bash
+git clone https://github.com/mmsk2007/helloagi.git
+cd helloagi
+pip install -e .
+helloagi onboard
+```
+
+## Option C: Quick Install Script
+
+```bash
+git clone https://github.com/mmsk2007/helloagi.git
 cd helloagi
 ./scripts/install.sh
 ```
 
-This installs HelloAGI to a local `_local_install/` directory (no root/sudo needed).
-
-For a global editable install instead:
+The install script handles dependency installation, config initialization, and health checks. For a global editable install:
 
 ```bash
 HELLOAGI_GLOBAL_INSTALL=1 ./scripts/install.sh
 ```
 
-## Option B: pip install (editable)
-
-```bash
-git clone https://github.com/user/helloagi.git
-cd helloagi
-pip install -e .
-```
-
-This installs the `helloagi` CLI command globally in your environment.
-
-## Option C: pip install (local target, no root)
-
-```bash
-git clone https://github.com/user/helloagi.git
-cd helloagi
-python3 -m pip install . --target ./_local_install
-```
-
-Then prefix all commands with:
-```bash
-PYTHONPATH=./_local_install python3 -m agi_runtime.cli <command>
-```
-
 ## Option D: Docker
 
 ```bash
-git clone https://github.com/user/helloagi.git
+docker pull ghcr.io/mmsk2007/helloagi:latest
+docker run --rm -p 8787:8787 -e ANTHROPIC_API_KEY=your-key ghcr.io/mmsk2007/helloagi:latest
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/mmsk2007/helloagi.git
 cd helloagi
 docker build -t helloagi:latest .
-docker run --rm -p 8787:8787 \
-  -e ANTHROPIC_API_KEY=your-key \
-  helloagi:latest
+docker run --rm -p 8787:8787 -e ANTHROPIC_API_KEY=your-key helloagi:latest
 ```
 
 The container runs the HTTP API server on port 8787 by default.
@@ -72,13 +68,7 @@ The container runs the HTTP API server on port 8787 by default.
 helloagi onboard
 ```
 
-This interactive wizard configures:
-- Agent name and owner
-- Timezone
-- Default model tier (speed / balanced / quality)
-- API keys (Anthropic, OpenAI, Google)
-
-Saves to `helloagi.onboard.json`.
+The interactive wizard configures agent identity, timezone, model tier, and API keys. Saves to `helloagi.onboard.json`.
 
 ### 2. Initialize runtime config
 
@@ -88,7 +78,7 @@ helloagi init
 
 Creates `helloagi.json` with default mission, style, domain, and file paths.
 
-### 3. Set up API keys
+### 3. Set up API keys (optional)
 
 ```bash
 cp .env.example .env
@@ -96,7 +86,6 @@ cp .env.example .env
 #   ANTHROPIC_API_KEY=sk-ant-...
 #   OPENAI_API_KEY=sk-...        (optional)
 #   GOOGLE_API_KEY=...           (optional)
-#   GOOGLE_EMBEDDING_API_KEY=... (optional, for Embedding 2)
 source .env
 ```
 
@@ -155,7 +144,7 @@ curl -s http://127.0.0.1:8787/chat \
 
 | Problem | Solution |
 |---|---|
-| `command not found: helloagi` | Use `pip install -e .` or prefix with `PYTHONPATH=./_local_install python3 -m agi_runtime.cli` |
+| `command not found: helloagi` | Run `pip install -e .` or `pip install helloagi` |
 | `ModuleNotFoundError: anthropic` | Run `pip install anthropic` |
 | Agent returns template responses | Set `ANTHROPIC_API_KEY` for Claude backbone |
 | Doctor shows missing files | Run `helloagi init` first |
@@ -168,9 +157,6 @@ curl -s http://127.0.0.1:8787/chat \
 ```bash
 # If installed with pip
 pip uninstall helloagi
-
-# If installed locally
-rm -rf _local_install/
 
 # Clean up generated files
 rm -f helloagi.json helloagi.onboard.json
