@@ -5,7 +5,10 @@ This is the beating heart of HelloAGI. It combines:
 - Deterministic SRG governance on EVERY action (unjailbreakable safety)
 - Persistent identity evolution (the agent grows smarter)
 - Anticipatory latency caching (ALE)
-- Semantic memory integration
+- Semantic memory integration (auto-store + auto-recall)
+- Skill crystallization (learns from successful workflows)
+- Sub-agent delegation (spawns isolated specialists)
+- Context compression (handles infinite conversations)
 - Full observability via JSONL journal
 """
 
@@ -24,6 +27,10 @@ from agi_runtime.memory.identity import IdentityEngine
 from agi_runtime.config.settings import RuntimeSettings
 from agi_runtime.tools.registry import ToolRegistry, ToolResult, discover_builtin_tools
 from agi_runtime.observability.journal import Journal
+from agi_runtime.skills.manager import SkillManager
+from agi_runtime.memory.compressor import ContextCompressor
+from agi_runtime.robustness.circuit_breaker import CircuitBreaker
+from agi_runtime.supervisor.supervisor import Supervisor
 
 try:
     import anthropic as _anthropic_lib
@@ -50,13 +57,6 @@ class ToolCall:
     input: dict
 
 
-@dataclass
-class ConversationMessage:
-    """A message in the conversation history."""
-    role: str  # "user", "assistant", "tool_result"
-    content: Any
-
-
 class HelloAGIAgent:
     """The HelloAGI autonomous agent.
 
@@ -67,9 +67,9 @@ class HelloAGIAgent:
     MAX_TURNS = 40
     MAX_OUTPUT_TOKENS = 16384
 
-    def __init__(self, settings: RuntimeSettings | None = None):
+    def __init__(self, settings: RuntimeSettings | None = None, policy_pack: str = "safe-default"):
         self.settings = settings or RuntimeSettings()
-        self.governor = SRGGovernor()
+        self.governor = SRGGovernor(policy_pack=policy_pack)
         self.ale = ALEngine()
         self.identity = IdentityEngine(
             path=self.settings.memory_path,
@@ -78,29 +78,50 @@ class HelloAGIAgent:
             domain_focus=self.settings.domain_focus,
         )
         self.journal = Journal(self.settings.journal_path)
+        self.skills = SkillManager()
+        self.compressor = ContextCompressor()
+        self.circuit_breaker = CircuitBreaker(failure_threshold=5, cooldown_seconds=60.0)
+        self.supervisor = Supervisor(pause_consecutive=5, pause_rate=0.5)
 
         # Initialize tool registry and discover all builtin tools
         self.tool_registry = ToolRegistry.get_instance()
         discover_builtin_tools()
 
+        # Semantic memory store (lazy-loaded)
+        self._embedding_store = None
+
         # Conversation history for multi-turn context
         self._history: List[dict] = []
+
+        # Track tool calls in current session for skill crystallization
+        self._session_tool_calls: List[dict] = []
 
         # Wire Claude API backbone
         self._claude = None
         if _ANTHROPIC_AVAILABLE and os.environ.get("ANTHROPIC_API_KEY"):
             self._claude = _anthropic_lib.Anthropic()
 
-        # Callback for user input (set by CLI/API layer)
+        # Callbacks (set by CLI/API layer)
         self.on_user_input: Optional[callable] = None
-        # Callback for streaming output (set by CLI/API layer)
         self.on_stream: Optional[callable] = None
-        # Callback for tool execution display (set by CLI/API layer)
         self.on_tool_start: Optional[callable] = None
         self.on_tool_end: Optional[callable] = None
 
+    @property
+    def embedding_store(self):
+        """Lazy-load embedding store."""
+        if self._embedding_store is None:
+            try:
+                from agi_runtime.memory.embeddings import GeminiEmbeddingStore
+                self._embedding_store = GeminiEmbeddingStore()
+            except Exception:
+                self._embedding_store = None
+        return self._embedding_store
+
+    # ── System Prompt Builder ──────────────────────────────────
+
     def _build_system_prompt(self) -> str:
-        """Build the system prompt from identity, memory, and skills."""
+        """Build the system prompt from identity, memory, skills, and context."""
         identity = self.identity.state
         parts = [
             f"You are {identity.name}, a {identity.character}.",
@@ -109,7 +130,7 @@ class HelloAGIAgent:
             f"Style: {self.settings.style}.",
             f"Domain focus: {self.settings.domain_focus}.",
             "",
-            "You are a world-class autonomous agent powered by HelloAGI.",
+            "You are a world-class autonomous agent powered by HelloAGI — the first AGI runtime with deterministic governance.",
             "You have tools to interact with the real world: execute commands, read/write files, search the web, run code, and more.",
             "You MUST use tools to accomplish tasks — don't just describe what to do, actually DO it.",
             "",
@@ -122,9 +143,21 @@ class HelloAGIAgent:
             "Be direct, practical, and action-oriented. Show results, not plans.",
             "If you need clarification, use the ask_user tool.",
             "If a tool call fails, analyze the error and try a different approach.",
+            "",
+            "After completing a complex multi-step task successfully, consider using skill_create",
+            "to save the workflow as a reusable skill for future similar requests.",
+            "Before starting a task, check if skill_invoke can help with an existing skill.",
         ]
 
-        # Inject memory context if available
+        # Inject skill index
+        skills_index = self.skills.get_skills_index()
+        if skills_index:
+            parts.append("")
+            parts.append("<skills>")
+            parts.append(skills_index)
+            parts.append("</skills>")
+
+        # Inject memory context
         memory_context = self._get_memory_context()
         if memory_context:
             parts.append("")
@@ -135,27 +168,179 @@ class HelloAGIAgent:
         return "\n".join(parts)
 
     def _get_memory_context(self) -> Optional[str]:
-        """Retrieve relevant memories for the current context."""
+        """Retrieve relevant memories for the current context via semantic search."""
+        store = self.embedding_store
+        if not store or not store.available or store.count() == 0:
+            # Fallback: check text-based memory file
+            return self._get_file_memory_context()
+
         try:
-            from agi_runtime.memory.embeddings import GeminiEmbeddingStore
-            store = GeminiEmbeddingStore()
-            if store.available and store.count() > 0:
-                # Search for relevant memories based on recent conversation
-                recent_text = " ".join(
-                    m.get("content", "")[:100] if isinstance(m.get("content"), str) else ""
-                    for m in self._history[-3:]
-                )
-                if recent_text.strip():
-                    results = store.search(recent_text, top_k=3)
-                    if results:
-                        return "\n".join(f"- [{r.metadata.get('category', 'fact')}] {r.text}" for r in results)
+            # Build query from recent conversation
+            recent_text = " ".join(
+                m.get("content", "")[:200] if isinstance(m.get("content"), str) else ""
+                for m in self._history[-5:]
+            )
+            if not recent_text.strip():
+                return None
+
+            results = store.search(recent_text, top_k=5)
+            if results:
+                entries = []
+                for r in results:
+                    if r.score > 0.3:  # Only include relevant memories
+                        cat = r.metadata.get("category", "fact")
+                        entries.append(f"- [{cat}] {r.text}")
+                if entries:
+                    return "\n".join(entries)
         except Exception:
             pass
         return None
 
-    def _get_tool_schemas(self) -> List[dict]:
-        """Get Claude-format tool schemas for all available tools."""
-        return self.tool_registry.get_schemas()
+    def _get_file_memory_context(self) -> Optional[str]:
+        """Fallback: read from text-based memory file."""
+        from pathlib import Path
+        mem_file = Path("memory/facts.txt")
+        if mem_file.exists():
+            try:
+                lines = mem_file.read_text(encoding="utf-8").splitlines()
+                if lines:
+                    # Return last 10 memories
+                    return "\n".join(f"- {l}" for l in lines[-10:])
+            except Exception:
+                pass
+        return None
+
+    # ── Auto Memory Store ──────────────────────────────────────
+
+    def _auto_store_memory(self, user_input: str, response_text: str):
+        """Automatically extract and store key facts from the interaction."""
+        # Only store if the interaction was substantial
+        if len(response_text) < 50 or len(user_input) < 10:
+            return
+
+        store = self.embedding_store
+        if store and store.available:
+            # Store user preferences and key facts
+            try:
+                # Store the core interaction as a memory
+                summary = f"User asked: {user_input[:200]}. Agent responded about: {response_text[:200]}"
+                store.add(summary, metadata={"category": "interaction", "ts": time.time()})
+            except Exception:
+                pass
+        else:
+            # Fallback: append to text file
+            from pathlib import Path
+            mem_file = Path("memory/facts.txt")
+            mem_file.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                with mem_file.open("a", encoding="utf-8") as f:
+                    f.write(f"[interaction] User: {user_input[:100]} | Response: {response_text[:100]}\n")
+            except Exception:
+                pass
+
+    # ── Sub-Agent Delegation ───────────────────────────────────
+
+    async def _handle_delegation(self, goal: str, context: str, toolset_filter: str, max_turns: int) -> str:
+        """Spawn an isolated sub-agent to handle a delegated task."""
+        if not self._claude:
+            return "Cannot delegate: LLM backbone not configured."
+
+        # Build restricted tool list
+        if toolset_filter:
+            allowed = [t.strip() for t in toolset_filter.split(",")]
+            tools = [s for s in self._get_tool_schemas() if s["name"] in allowed]
+        else:
+            # Default sub-agent tools (no delegation to prevent recursion)
+            blocked = {"delegate_task", "skill_create", "skill_invoke"}
+            tools = [s for s in self._get_tool_schemas() if s["name"] not in blocked]
+
+        sub_system = (
+            f"You are a specialist sub-agent of {self.identity.state.name}.\n"
+            f"Your task: {goal}\n"
+            f"Context: {context}\n\n"
+            "Complete the task efficiently. Be concise in your final response.\n"
+            "You have a limited number of turns — focus on the goal."
+        )
+
+        sub_history = [{"role": "user", "content": f"Task: {goal}\n\nContext: {context}"}]
+        sub_max = min(max_turns, 15)
+        results_summary = []
+
+        for turn in range(sub_max):
+            try:
+                response = self._claude.messages.create(
+                    model="claude-haiku-4-5-20251001",  # Use fast model for sub-agents
+                    max_tokens=4096,
+                    system=sub_system,
+                    tools=tools,
+                    messages=sub_history,
+                )
+            except Exception as e:
+                return f"Sub-agent LLM error: {e}"
+
+            text_parts = []
+            tool_calls = []
+            for block in response.content:
+                if block.type == "text":
+                    text_parts.append(block.text)
+                elif block.type == "tool_use":
+                    tool_calls.append(ToolCall(id=block.id, name=block.name, input=block.input))
+
+            sub_history.append({"role": "assistant", "content": response.content})
+
+            if not tool_calls:
+                final = "\n".join(text_parts)
+                self.journal.write("delegation_complete", {
+                    "goal": goal[:200],
+                    "turns": turn + 1,
+                    "result_preview": final[:300],
+                })
+                return final
+
+            # Execute tool calls with SRG governance
+            tool_results = []
+            for tc in tool_calls:
+                tool_def = self.tool_registry.get(tc.name)
+                tool_risk = tool_def.risk.value if tool_def else "medium"
+                tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
+
+                if tool_gov.decision == "deny":
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": f"BLOCKED by SRG: {'; '.join(tool_gov.reasons)}",
+                    })
+                    continue
+
+                if not self.circuit_breaker.can_execute(tc.name):
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": f"Circuit breaker open for '{tc.name}' — skipped.",
+                    })
+                    continue
+
+                result = await self.tool_registry.execute(tc.name, tc.input)
+                if result.ok:
+                    self.circuit_breaker.record_success(tc.name)
+                else:
+                    self.circuit_breaker.record_failure(tc.name)
+                self.journal.write("delegation_tool", {
+                    "goal": goal[:100],
+                    "tool": tc.name,
+                    "ok": result.ok,
+                })
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc.id,
+                    "content": result.to_content()[:5000],
+                })
+
+            sub_history.append({"role": "user", "content": tool_results})
+
+        return f"Sub-agent completed {sub_max} turns on: {goal}"
+
+    # ── Main Think Loop ────────────────────────────────────────
 
     def think(self, user_input: str) -> AgentResponse:
         """Main entry point — synchronous wrapper around the async agentic loop."""
@@ -165,7 +350,6 @@ class HelloAGIAgent:
             loop = None
 
         if loop and loop.is_running():
-            # Already in an async context — run in thread
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 future = pool.submit(asyncio.run, self._think_async(user_input))
@@ -199,6 +383,7 @@ class HelloAGIAgent:
 
         # 5. THE AGENTIC LOOP — real AGI behavior
         self._history.append({"role": "user", "content": user_input})
+        self._session_tool_calls = []
         tools = self._get_tool_schemas()
         system_prompt = self._build_system_prompt()
 
@@ -239,7 +424,6 @@ class HelloAGIAgent:
                         input=block.input,
                     ))
                 elif block.type == "thinking":
-                    # Log thinking but don't expose to user
                     self.journal.write("thinking", {"text": getattr(block, 'thinking', '')[:500]})
 
             # Add assistant message to history
@@ -249,12 +433,15 @@ class HelloAGIAgent:
             if not tool_calls:
                 final_text = "\n".join(text_parts)
 
-                # Add escalation warning if needed
                 if gov.decision == "escalate":
                     final_text += "\n\n⚠️ This request was flagged for human confirmation before high-risk actions."
 
                 # Cache the response
                 self.ale.put(user_input, final_text)
+
+                # Auto-store to memory
+                self._auto_store_memory(user_input, final_text)
+
                 self.journal.write("response", {
                     "decision": gov.decision,
                     "risk": gov.risk,
@@ -278,11 +465,31 @@ class HelloAGIAgent:
             for tc in tool_calls:
                 total_tool_calls += 1
 
+                # Special handling: delegate_task spawns a real sub-agent
+                if tc.name == "delegate_task" and self._claude:
+                    delegation_result = await self._handle_delegation(
+                        goal=tc.input.get("goal", ""),
+                        context=tc.input.get("context", ""),
+                        toolset_filter=tc.input.get("toolset", ""),
+                        max_turns=tc.input.get("max_turns", 15),
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": delegation_result,
+                    })
+                    self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": True})
+                    if self.on_tool_start:
+                        self.on_tool_start(tc.name, tc.input, "allow")
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, True, delegation_result[:200])
+                    continue
+
                 # Get tool definition for risk level
                 tool_def = self.tool_registry.get(tc.name)
                 tool_risk = tool_def.risk.value if tool_def else "medium"
 
-                # SRG GOVERNANCE ON EVERY TOOL CALL — HelloAGI's killer feature
+                # SRG GOVERNANCE ON EVERY TOOL CALL
                 tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
 
                 if self.on_tool_start:
@@ -305,7 +512,6 @@ class HelloAGIAgent:
                     continue
 
                 if tool_gov.decision == "escalate":
-                    # Ask user for approval
                     approved = await self._request_user_approval(tc, tool_gov)
                     if not approved:
                         result_content = "User denied this action."
@@ -319,8 +525,38 @@ class HelloAGIAgent:
                             self.on_tool_end(tc.name, False, result_content)
                         continue
 
+                # Circuit breaker check — skip tools that are failing repeatedly
+                if not self.circuit_breaker.can_execute(tc.name):
+                    cb_status = self.circuit_breaker.get_status(tc.name)
+                    result_content = (
+                        f"⚡ Circuit breaker OPEN for '{tc.name}' — "
+                        f"{cb_status['failures']} consecutive failures. "
+                        f"Will retry after cooldown."
+                    )
+                    self.journal.write("circuit_breaker_open", {
+                        "tool": tc.name,
+                        "failures": cb_status["failures"],
+                        "short_circuited": cb_status["short_circuited"],
+                    })
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": result_content,
+                    })
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
                 # Execute the tool
                 result = await self.tool_registry.execute(tc.name, tc.input)
+
+                # Record success/failure in circuit breaker + supervisor
+                if result.ok:
+                    self.circuit_breaker.record_success(tc.name)
+                    self.supervisor.record_tool_success(tc.name)
+                else:
+                    self.circuit_breaker.record_failure(tc.name)
+                    self.supervisor.record_tool_failure(tc.name, result.to_content()[:200])
 
                 self.journal.write("tool_exec", {
                     "tool": tc.name,
@@ -329,6 +565,12 @@ class HelloAGIAgent:
                     "output_preview": result.to_content()[:300],
                     "governance": tool_gov.decision,
                     "risk": tool_gov.risk,
+                })
+
+                self._session_tool_calls.append({
+                    "tool": tc.name,
+                    "input": tc.input,
+                    "ok": result.ok,
                 })
 
                 tool_results.append({
@@ -343,16 +585,23 @@ class HelloAGIAgent:
             # Add tool results to history
             self._history.append({"role": "user", "content": tool_results})
 
-            # Context management — trim if too large
-            self._maybe_trim_history()
+            # Context compression if needed
+            if self.compressor.needs_compression(self._history):
+                self._history = await self.compressor.compress(self._history)
+                self.journal.write("context_compressed", {"new_length": len(self._history)})
 
         # Reached max turns
-        final_text = f"I've used all {self.MAX_TURNS} turns working on your request. Here's what I accomplished with {total_tool_calls} tool calls across {turns_used} turns."
+        final_text = (
+            f"I've used all {self.MAX_TURNS} turns working on your request. "
+            f"Made {total_tool_calls} tool calls across {turns_used} turns."
+        )
         self.journal.write("max_turns_reached", {"tool_calls": total_tool_calls})
         return AgentResponse(
             text=final_text, decision=gov.decision, risk=gov.risk,
             tool_calls_made=total_tool_calls, turns_used=turns_used,
         )
+
+    # ── Helpers ────────────────────────────────────────────────
 
     async def _request_user_approval(self, tool_call: ToolCall, gov: GovernanceResult) -> bool:
         """Request user approval for an escalated tool call."""
@@ -366,7 +615,6 @@ class HelloAGIAgent:
         if self.on_user_input:
             response = self.on_user_input(prompt)
         else:
-            # Fallback to stdin
             try:
                 response = input(prompt).strip().lower()
             except (EOFError, KeyboardInterrupt):
@@ -379,37 +627,30 @@ class HelloAGIAgent:
         from agi_runtime.models.router import ModelRouter
         router = ModelRouter()
         decision = router.route(user_input)
+        return decision.model
 
-        model_map = {
-            "speed": "claude-haiku-4-5-20251001",
-            "balanced": "claude-sonnet-4-6-20250514",
-            "quality": "claude-sonnet-4-6-20250514",
-        }
-        return model_map.get(decision.tier, "claude-sonnet-4-6-20250514")
+    def _get_tool_schemas(self) -> List[dict]:
+        """Get Claude-format tool schemas for all available tools."""
+        return self.tool_registry.get_schemas()
 
     def _template_response(self, user_input: str, gov: GovernanceResult) -> str:
         """Fallback response when Claude API is not available."""
+        tools_list = ", ".join(t.name for t in self.tool_registry.list_tools())
         text = (
             f"[{self.identity.state.name} | {self.identity.state.character}]\n"
             f"I received your request but my LLM backbone is not configured.\n"
             f"To enable full AGI capabilities, set ANTHROPIC_API_KEY in your environment.\n\n"
-            f"Without the LLM, I can still run tools via /tool commands:\n"
-            f"  Available tools: {', '.join(t.name for t in self.tool_registry.list_tools())}\n"
+            f"Without the LLM, I can still run tools directly.\n"
+            f"Available tools ({len(self.tool_registry.list_tools())}): {tools_list}\n"
         )
         if gov.decision == "escalate":
             text += "\n⚠️ This request was flagged for human confirmation."
         return text
 
-    def _maybe_trim_history(self):
-        """Trim conversation history if it's getting too long."""
-        # Keep last 30 messages to stay within context limits
-        if len(self._history) > 40:
-            # Keep first message (original user input) + last 30
-            self._history = self._history[:1] + self._history[-30:]
-
     def clear_history(self):
         """Clear conversation history for a fresh session."""
         self._history = []
+        self._session_tool_calls = []
 
     def get_tools_info(self) -> str:
         """Get a formatted list of available tools."""

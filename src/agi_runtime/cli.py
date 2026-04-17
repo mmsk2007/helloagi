@@ -139,6 +139,9 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
             "  /new       — Start fresh conversation\n"
             "  /policy    — Show current governance policy\n"
             "  /packs     — List available policy packs\n"
+            "  /dashboard — Show live monitoring dashboard\n"
+            "  /supervisor— Show supervisor health status\n"
+            "  /circuits  — Show circuit breaker states\n"
             "  /help      — Show this help\n"
             "  exit       — Quit\n"
         )
@@ -226,6 +229,49 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
                 console.print(line)
             else:
                 print(line)
+
+    elif command == "/dashboard":
+        from agi_runtime.diagnostics.dashboard import DashboardStats, render_dashboard
+        stats = DashboardStats()
+        stats.load_from_journal()
+        output = render_dashboard(agent=agent, stats=stats, circuit_breaker=agent.circuit_breaker)
+        if console:
+            console.print(output)
+        else:
+            print(output)
+
+    elif command == "/supervisor":
+        status = agent.supervisor.get_status()
+        incident_summary = agent.supervisor.get_incident_summary()
+        info = (
+            f"Incidents: {incident_summary['total_incidents']} "
+            f"(critical: {incident_summary['critical']}, warning: {incident_summary['warning']})\n"
+            f"Paused tools: {', '.join(incident_summary['paused_tools']) or 'none'}\n"
+            f"Paused agents: {', '.join(incident_summary['paused_agents']) or 'none'}"
+        )
+        if status["tools"]:
+            info += "\n\nTool Health:"
+            for name, ts in sorted(status["tools"].items()):
+                info += f"\n  {name}: {ts['calls']} calls, {ts['failures']} failures ({ts['failure_rate']:.0%})"
+        if _RICH_AVAILABLE and console:
+            console.print(Panel(info, title="Supervisor Status", border_style="yellow"))
+        else:
+            print(info)
+
+    elif command == "/circuits":
+        all_cb = agent.circuit_breaker.get_all_status()
+        if all_cb:
+            lines = []
+            for cb in all_cb:
+                icon = {"closed": "🟢", "open": "🔴", "half_open": "🟡"}.get(cb["state"], "⬜")
+                lines.append(f"  {icon} {cb['resource']}: {cb['state']} (failures={cb['failures']}, skipped={cb['short_circuited']})")
+            output = "\n".join(lines)
+        else:
+            output = "No circuit breakers active yet."
+        if _RICH_AVAILABLE and console:
+            console.print(Panel(output, title="Circuit Breakers", border_style="cyan"))
+        else:
+            print(output)
 
     else:
         msg = f"Unknown command: {command}. Type /help for available commands."
@@ -370,6 +416,54 @@ def openclaw(prompt: str, config_path: str):
     print(f"openclaw {confirm_flag}\n{task.summary}")
 
 
+def _serve_with_channels(args):
+    """Start HTTP API with optional Telegram/Discord channels."""
+    import asyncio
+    settings = load_settings(args.config)
+    agent = HelloAGIAgent(settings)
+
+    from agi_runtime.channels.router import ChannelRouter
+    router = ChannelRouter(agent)
+
+    if args.telegram:
+        try:
+            from agi_runtime.channels.telegram import TelegramChannel
+            tg = TelegramChannel(agent)
+            router.register(tg)
+            print("Telegram channel registered")
+        except Exception as e:
+            print(f"Telegram channel failed: {e}")
+
+    if args.discord:
+        try:
+            from agi_runtime.channels.discord import DiscordChannel
+            dc = DiscordChannel(agent)
+            router.register(dc)
+            print("Discord channel registered")
+        except Exception as e:
+            print(f"Discord channel failed: {e}")
+
+    # Start HTTP server in a thread, channels via asyncio
+    import threading
+    from agi_runtime.api.server import HelloAGIHandler, ThreadedHTTPServer
+    import os
+
+    HelloAGIHandler.agent = agent
+    HelloAGIHandler.api_key = os.environ.get("HELLOAGI_API_KEY")
+    srv = ThreadedHTTPServer((args.host, args.port), HelloAGIHandler)
+
+    http_thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    http_thread.start()
+    print(f"HTTP API listening on http://{args.host}:{args.port}")
+
+    # Start channels
+    try:
+        asyncio.run(router.start_all())
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        srv.shutdown()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="HelloAGI — Governed Autonomous Intelligence",
@@ -403,6 +497,9 @@ def main():
     serverp = sub.add_parser("serve", help="start local HTTP API")
     serverp.add_argument("--host", default="127.0.0.1")
     serverp.add_argument("--port", type=int, default=8787)
+    serverp.add_argument("--telegram", action="store_true", help="also start Telegram bot")
+    serverp.add_argument("--discord", action="store_true", help="also start Discord bot")
+    serverp.add_argument("--config", default="helloagi.json")
 
     docp = sub.add_parser("doctor", help="check local runtime state")
     docp.add_argument("--config", default="helloagi.json")
@@ -440,6 +537,8 @@ def main():
     # New commands
     toolsp = sub.add_parser("tools", help="list available tools")
     skillsp = sub.add_parser("skills", help="list learned skills")
+    dashp = sub.add_parser("dashboard", help="live monitoring dashboard")
+    dashp.add_argument("--config", default="helloagi.json")
 
     args = parser.parse_args()
 
@@ -452,7 +551,10 @@ def main():
     elif args.cmd == "auto":
         auto(args.goal, args.steps, args.config)
     elif args.cmd == "serve":
-        run_server(args.host, args.port)
+        if args.telegram or args.discord:
+            _serve_with_channels(args)
+        else:
+            run_server(args.host, args.port, getattr(args, "config", "helloagi.json"))
     elif args.cmd == "doctor":
         doctor(args.config)
     elif args.cmd == "orchestrate-demo":
@@ -489,6 +591,11 @@ def main():
                 print(f"  {s.name}: {s.description} (used {s.invoke_count}x)")
         else:
             print("No skills learned yet.")
+    elif args.cmd == "dashboard":
+        from agi_runtime.diagnostics.dashboard import run_dashboard
+        settings = load_settings(args.config)
+        agent = HelloAGIAgent(settings)
+        run_dashboard(agent=agent)
 
 
 if __name__ == "__main__":
