@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from agi_runtime.workflows.graph import WorkflowGraph
 from agi_runtime.orchestration.event_bus import EventBus
