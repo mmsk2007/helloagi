@@ -1,0 +1,18 @@
+[
+  {
+    "ts": 1776468062.1725626,
+    "sentiment": "neutral",
+    "score": 0.0,
+    "dominant_emotion": "neutral",
+    "confidence": 0.5,
+    "text_preview": "help me build an agent"
+  },
+  {
+    "ts": 1776468121.6692483,
+    "sentiment": "neutral",
+    "score": 0.0,
+    "dominant_emotion": "neutral",
+    "confidence": 0.5,
+    "text_preview": "help me build an agent"
+  }
+]

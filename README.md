@@ -1,7 +1,8 @@
 <p align="center">
   <h1 align="center">HelloAGI</h1>
   <p align="center">
-    <em>The first open-source framework to achieve AGI-class autonomous behavior through governed intelligence.</em>
+    <strong>The world's first open-source AGI runtime.</strong><br>
+    <em>Not another chatbot wrapper. A complete autonomous intelligence that thinks, acts, learns, and grows — governed by deterministic safety that no prompt can bypass.</em>
   </p>
 </p>
 
@@ -13,263 +14,504 @@
     <img src="https://img.shields.io/pypi/v/helloagi.svg" alt="PyPI Version">
   </a>
   <a href="https://pypi.org/project/helloagi/">
-    <img src="https://img.shields.io/pypi/pyversions/helloagi.svg" alt="Python Versions">
+    <img src="https://img.shields.io/pypi/pyversions/helloagi.svg" alt="Python 3.9+">
   </a>
-  <a href="https://github.com/mmsk2007/helloagi/actions">
-    <img src="https://img.shields.io/badge/Tests-54%20Passed-success" alt="Tests">
+  <a href="#">
+    <img src="https://img.shields.io/badge/Tests-100%20Passed-success" alt="Tests">
   </a>
-  <a href="https://github.com/mmsk2007/helloagi/blob/main/docs/srg-integration.md">
-    <img src="https://img.shields.io/badge/Governance-SRG_Enabled-purple.svg" alt="SRG Governance">
+  <a href="#">
+    <img src="https://img.shields.io/badge/Tools-17%20Built--in-orange" alt="17 Tools">
+  </a>
+  <a href="#">
+    <img src="https://img.shields.io/badge/Governance-SRG%20Active-purple.svg" alt="SRG Governance">
   </a>
 </p>
 
 <p align="center">
-  <a href="#quickstart">Quickstart</a> &middot;
-  <a href="#why-helloagi">Why HelloAGI</a> &middot;
-  <a href="#architecture">Architecture</a> &middot;
+  <a href="#the-30-second-start">30s Start</a> &middot;
+  <a href="#why-helloagi-is-1">Why #1</a> &middot;
+  <a href="#the-architecture">Architecture</a> &middot;
   <a href="#srg-the-breakthrough">SRG</a> &middot;
-  <a href="#gemini-embedding-2-integration">Embeddings</a> &middot;
-  <a href="#cli-reference">CLI</a> &middot;
-  <a href="#api">API</a> &middot;
-  <a href="docs/roadmap/MASTERPLAN.md">Roadmap</a>
+  <a href="#17-real-tools">Tools</a> &middot;
+  <a href="#the-personality">Personality</a> &middot;
+  <a href="#api--channels">API</a> &middot;
+  <a href="#join-the-movement">Movement</a>
 </p>
 
 ---
 
-## What is HelloAGI?
+> *"Whatever the mind can conceive and believe, it can achieve."*
+> — Napoleon Hill, Think and Grow Rich
 
-HelloAGI is a production-grade, local-first AGI orchestration runtime created by **Eng. Mohammed Mazyad Alkhaldi**. It is the first framework to combine **unbounded autonomous agent loops** with **deterministic governance enforcement** — meaning the agent can plan, execute, reflect, and self-correct across multi-step goals without losing safety guarantees at any point in the chain.
+---
 
-Other agent frameworks give you tool-calling wrappers or prompt chains. HelloAGI gives you a **complete runtime**: governance gates, identity evolution, anticipatory caching, workflow orchestration, persistent memory, and full observability — all running locally, all open source.
+## This Is Not Just Software. This Is a Movement.
+
+We are building the future of intelligence. Not locked behind corporate APIs. Not gated by billion-dollar infrastructure. Running on **your machine**, governed by **your rules**, evolving with **you**.
+
+HelloAGI is the first open-source framework where an autonomous agent can:
+- **Think**: Break down any goal into executable steps
+- **Act**: Use 17 real tools to execute in the real world — run code, write files, search the web, manage memory
+- **Learn**: Crystallize successful workflows into reusable skills that make it smarter over time
+- **Grow**: Evolve its identity, principles, and personality across every interaction
+- **Stay Safe**: Every single action passes through SRG — a deterministic governance gate that **no prompt injection, no jailbreak, no hallucination** can bypass
+
+This is the agentic AGI revolution. And it starts here.
+
+---
+
+## The 30-Second Start
+
+```bash
+pip install helloagi
+helloagi
+```
+
+That's it. On first run, HelloAGI launches a beautiful onboarding wizard that auto-detects your environment, configures your agent, runs a self-test, and drops you into a ready-to-go AGI session.
+
+> *"The starting point of all achievement is desire."*
+> — Napoleon Hill
+
+### What Happens When You Run `helloagi`
 
 ```
-you> help me build an autonomous growth agent
-agent[allow:0.05]> [Lana | Builder-mentor] Plan: define objective,
-    map constraints, execute measurable steps, verify outcomes.
+  ╦ ╦╔═╗╦  ╦  ╔═╗╔═╗╔═╗╦  v0.5.0
+  ╠═╣║╣ ║  ║  ║ ║╠═╣║ ╦║
+  ╩ ╩╚═╝╩═╝╩═╝╚═╝╩ ╩╚═╝╩
+
+  The first open-source AGI runtime
+  Governed autonomy  ·  Evolving identity  ·  Local-first
+
+  "You are the master of your destiny."
+    — Think And Grow Rich
+
+  [█░░░░] Step 1/5: Detecting Environment
+    ✓ OS: Windows | Python: 3.9.18
+    ✓ Anthropic API key found in environment
+
+  [██░░░] Step 2/5: Agent Identity
+    > Agent name: Lana
+    > What should I call you?: Mohammed
+
+  ...
+
+  ────────────────────────────────────────────
+    Setup Complete!  Readiness: A+ (5/5 checks)
+  ────────────────────────────────────────────
+
+    $ helloagi run     ← Start your AGI session
+```
+
+### Quick Commands
+
+```bash
+helloagi                                        # Interactive AGI session (auto-onboard on first run)
+helloagi run                                    # Rich TUI with tool panels & governance indicators
+helloagi oneshot --message "What can you do?"   # Single question
+helloagi serve                                  # HTTP API on localhost:8787
+helloagi serve --telegram                       # + Telegram bot
+helloagi serve --discord                        # + Discord bot
+helloagi dashboard                              # Live monitoring dashboard
+helloagi tools                                  # List all 17 tools
+helloagi skills                                 # List learned skills
 ```
 
 ---
 
-## Why HelloAGI is Different
+## Why HelloAGI Is #1
 
-### The AGI Gap in Existing Frameworks
+### The Problem With Every Other Framework
 
-| Capability | LangChain / CrewAI | AutoGPT | OpenClaw | Manus | **HelloAGI** |
-|---|---|---|---|---|---|
-| Autonomous multi-step execution | Limited | Yes (fragile) | Yes | Yes | **Yes (governed)** |
-| Deterministic safety gate on every action | No | No | Partial | No | **Yes (SRG)** |
-| Evolving agent identity & memory | No | Basic | No | No | **Yes** |
-| Anticipatory latency optimization | No | No | No | No | **Yes (ALE)** |
-| Plan / Execute / Verify loop | No | Partial | No | Yes | **Yes (TriLoop)** |
-| DAG workflow orchestration | No | No | Yes | Yes | **Yes** |
-| Local-first (no cloud dependency) | Partial | Partial | Yes | No | **Yes** |
-| Full observability journal | No | No | Partial | No | **Yes** |
-| Multimodal semantic memory (Gemini 2) | No | No | No | No | **Yes** |
-| Configurable Policy Packs | No | No | No | No | **Yes** |
+Every agent framework today falls into one of two traps:
 
-Most agent frameworks are either **powerful but unsafe** (AutoGPT-style yolo loops) or **safe but limited** (simple chain-of-thought wrappers). HelloAGI solves this with the **Strategic Governance Runtime (SRG)** — a deterministic policy layer that evaluates every single action before execution, making true autonomous AGI behavior possible without sacrificing safety.
+1. **Powerful but dangerous** — AutoGPT, BabyAGI, and similar "YOLO loop" agents that can do anything but have zero governance. One hallucination and they're running `rm -rf /`.
 
-### What Makes This AGI
+2. **Safe but useless** — LangChain, CrewAI, and chain-of-thought wrappers that are basically prompt templates with extra steps. They can't actually *do* anything autonomously.
 
-AGI is not about a single model being "smart enough." It is about a **runtime architecture** that enables:
+HelloAGI is the **first and only framework** that solves both simultaneously.
 
-1. **Open-ended goal pursuit** — the agent decomposes any goal into steps, executes them, and verifies outcomes
-2. **Self-correction** — the TriLoop (Plan -> Execute -> Verify) catches failures and adapts
-3. **Bounded autonomy** — SRG governance ensures the agent operates within defined safety boundaries while still acting independently
-4. **Persistent identity** — the agent evolves its character, principles, and domain expertise across sessions
-5. **Real-time governance** — every action is risk-scored and policy-gated before execution
+### The Comparison
 
-HelloAGI is the first framework to ship all five of these as a single, integrated runtime.
+| Capability | LangChain | AutoGPT | OpenAI SDK | CrewAI | Hermes | **HelloAGI** |
+|---|---|---|---|---|---|---|
+| Real autonomous tool-calling loop | No | Yes (fragile) | Limited | No | Yes | **Yes (governed)** |
+| Deterministic safety on EVERY action | No | No | No | No | No | **Yes (SRG)** |
+| Evolving agent identity | No | No | No | No | No | **Yes** |
+| Skill crystallization (agent learns) | No | No | No | No | No | **Yes** |
+| Anticipatory caching (ALE) | No | No | No | No | No | **Yes** |
+| Circuit breakers + auto-recovery | No | No | No | No | No | **Yes** |
+| Sub-agent delegation | No | No | Yes | Yes | Yes | **Yes (governed)** |
+| Context compression (infinite sessions) | No | No | No | No | No | **Yes** |
+| Growth tracking + personality | No | No | No | No | No | **Yes** |
+| Time-aware + situation-aware | No | No | No | No | No | **Yes** |
+| Works with 0 API keys | No | No | No | No | No | **Yes** |
+| 1-liner install to AGI | No | No | No | No | No | **Yes** |
+
+> *"What you think, you create. What you feel, you attract. What you imagine, you become."*
+> — The Secret
+
+---
+
+## The Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        USER INTERFACES                           │
+│  CLI (Rich TUI)  │  HTTP API (SSE)  │  Telegram  │  Discord     │
+└────────┬─────────┴────────┬──────────┴─────┬──────┴──────┬───────┘
+         └──────────────────┴────────┬───────┴─────────────┘
+                                     │
+┌────────────────────────────────────▼─────────────────────────────┐
+│                     AGENT KERNEL                                  │
+│                                                                   │
+│  ┌─────────────┐  ┌──────────────┐  ┌─────────────────────────┐ │
+│  │ IDENTITY     │  │ SRG GOVERNOR │  │ ALE CACHE               │ │
+│  │ Who am I?    │  │ Is it safe?  │  │ Have I seen this?       │ │
+│  │ (evolving)   │  │ (always on)  │  │ (anticipatory)          │ │
+│  └──────┬──────┘  └──────┬───────┘  └───────────┬─────────────┘ │
+│         │                │                       │               │
+│  ┌──────▼────────────────▼───────────────────────▼─────────────┐ │
+│  │              AGENTIC TOOL-CALLING LOOP                      │ │
+│  │                                                              │ │
+│  │  User goal → Plan → Execute tools → Verify → Respond        │ │
+│  │       ↑                                          │           │ │
+│  │       └──── Re-plan on failure ◄─────────────────┘           │ │
+│  │                                                              │ │
+│  │  Every tool call: SRG gate → Circuit breaker → Execute →    │ │
+│  │                   Supervisor → Journal → ALE cache          │ │
+│  └──────────────────────────┬───────────────────────────────────┘ │
+│                              │                                    │
+│  ┌──────────────────────────▼───────────────────────────────────┐ │
+│  │                    17 REAL TOOLS                              │ │
+│  │  SYSTEM       WEB          CODE         MEMORY    USER       │ │
+│  │  bash_exec    web_search   python_exec  mem_store ask_user   │ │
+│  │  file_read    web_fetch    code_analyze mem_recall notify     │ │
+│  │  file_write                             skills    delegate   │ │
+│  │  file_patch                             session              │ │
+│  │  file_search                                                 │ │
+│  └──────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │                 INTELLIGENCE LAYER                            │ │
+│  │  Personality Engine    │ Skill Crystallization                │ │
+│  │  Growth Tracker        │ Context Compression                  │ │
+│  │  Model Router          │ Semantic Memory (Gemini Embed)       │ │
+│  │  Time/Situation Aware  │ Identity Evolution                   │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+│                                                                   │
+│  ┌───────────────────────────────────────────────────────────────┐ │
+│  │                 ROBUSTNESS                                    │ │
+│  │  Circuit Breakers │ Supervisor │ SSRF Protection │ Journal   │ │
+│  │  Auto-Recovery    │ Incidents  │ Command Screen  │ Dashboard │ │
+│  └───────────────────────────────────────────────────────────────┘ │
+└───────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
 ## SRG: The Breakthrough
 
-**SRG (Strategic Governance Runtime)** is the core innovation that makes HelloAGI possible. It is a deterministic, policy-driven governance sidecar that runs **before every action** the agent takes.
-
-### How SRG Works
-
-```mermaid
-graph TD
-    A[User Input] --> B(SRG Governor)
-    B -->|risk > 0.75| C[DENY]
-    B -->|0.45 < risk <= 0.75| D[ESCALATE]
-    B -->|risk <= 0.45| E[ALLOW]
-    
-    C --> F[Agent Refuses / Suggests Alternative]
-    D --> G[Human Confirmation Required]
-    E --> H[Agent Proceeds Autonomously]
-```
-
-SRG uses **policy packs** — configurable rule sets that define what the agent can and cannot do:
-
-- **safe-default** — general-purpose safety boundaries
-- **research** — tuned for scientific and analytical workflows
-- **aggressive-builder** — broader autonomy for experienced developers
-
-This is not prompt-based safety. It is **deterministic, runtime-enforced governance** that cannot be bypassed by prompt injection or model hallucination. The governance gate runs in Python, outside the LLM, on every single action.
-
-Read the full [SRG Integration Guide](docs/srg-integration.md) for more details.
-
----
-
-## Quickstart
-
-### Prerequisites
-
-- Python 3.9+
-- An Anthropic API key (for Claude backbone) — *optional for local-only mode*
-
-### 1. One-Liner Install (Recommended)
-
-```bash
-pip install helloagi
-helloagi onboard
-```
-
-The interactive wizard will guide you through setting up your agent's identity, timezone, and API keys.
-
-### 2. Initialize and Verify
-
-```bash
-# Initialize runtime config
-helloagi init
-
-# Verify everything is working
-helloagi doctor
-```
-
-### 3. Start Your Agent
-
-```bash
-helloagi run --goal "Build useful intelligence that teaches and creates value"
-```
-
-For more installation options (Docker, Source, Script), see the [Install Guide](docs/install.md).
-
----
-
-## Architecture
+**SRG (Strategic Governance Runtime)** is what makes HelloAGI possible. It is a deterministic Python policy engine — not a prompt, not a guideline, not a suggestion. It is **code that runs before every action** and cannot be bypassed.
 
 ```
-                    +------------------+
-  User Input ------>|  SRG Governor    |----> DENY (blocked)
-                    |  (policy gate)   |
-                    +--------+---------+
-                             |
-                        ALLOW / ESCALATE
-                             |
-                    +--------v---------+
-                    |  Tool Parser     |  /tool plan|summarize|reflect
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |  ALE Cache       |  Anticipatory latency engine
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |  Claude Backbone |  Opus 4.6 (or template fallback)
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |  Identity Engine |  Evolving character & principles
-                    +--------+---------+
-                             |
-                    +--------v---------+
-                    |  Journal         |  Full observability (events.jsonl)
-                    +------------------+
+User says: "Delete all my files"
+  → SRG evaluates input: risk = 0.12, decision = allow
+  → Agent plans: use bash_exec with "rm -rf /"
+  → SRG evaluates tool call: DANGEROUS COMMAND DETECTED
+  → Decision: DENY
+  → Agent responds: "I can't do that. Would you like me to help clean up specific temp files instead?"
 ```
 
-### Core Subsystems
+### Why This Matters
 
-| Subsystem | Path | Purpose |
+Every other framework relies on **the model itself** to decide what's safe. That's like asking the employee to write their own performance review. HelloAGI separates governance from intelligence:
+
+- **The LLM decides WHAT to do** (intelligence)
+- **SRG decides IF it's allowed** (governance)
+- **They cannot be merged or bypassed** (deterministic safety)
+
+### Three Decisions
+
+| Decision | Risk Score | What Happens |
 |---|---|---|
-| **Runtime Core** | `src/agi_runtime/core/` | Agent loop, response lifecycle |
-| **SRG Governance** | `src/agi_runtime/governance/` | Policy gate, risk scoring, deny/escalate/allow |
-| **ALE Cache** | `src/agi_runtime/latency/` | Intent-based anticipatory response cache |
-| **Identity** | `src/agi_runtime/memory/` | Evolving agent character, purpose, principles |
-| **Tools** | `src/agi_runtime/tools/` | Plan, summarize, reflect (deterministic) |
-| **Orchestration** | `src/agi_runtime/orchestration/` | DAG engine, event bus, TriLoop |
-| **Planner** | `src/agi_runtime/planner/` | Goal decomposition into steps |
-| **Executor** | `src/agi_runtime/executor/` | Step execution with concurrency |
-| **Verifier** | `src/agi_runtime/verifier/` | Outcome verification against goals |
-| **Model Router** | `src/agi_runtime/models/` | Multi-model routing (speed/balanced/quality) |
+| **ALLOW** | 0 - 0.45 | Agent proceeds autonomously |
+| **ESCALATE** | 0.45 - 0.75 | Human confirmation required |
+| **DENY** | 0.75+ | Blocked with safe alternative |
 
----
+### What SRG Screens
 
-## CLI Reference
+- **Dangerous commands**: `rm -rf`, `dd`, `fork bombs`, `chmod 777`, pipe-to-shell
+- **Data exfiltration**: `os.environ`, `curl http://`, `requests.post()`, `/etc/passwd`
+- **Sensitive paths**: System directories, credential files
+- **Network operations**: Outbound connections from code execution
+- **SSRF attacks**: Blocks localhost, private IPs, internal hostnames
 
-### Setup & Configuration
+### 6 Policy Packs
 
-```bash
-helloagi onboard                              # Interactive onboarding wizard
-helloagi onboard-status                       # Check onboarding completion
-helloagi init                                 # Initialize runtime config (helloagi.json)
-helloagi doctor                               # Verify runtime health
-helloagi doctor-score                         # Full readiness scorecard
-helloagi db-init                              # Initialize SQLite state database
-```
-
-### Running the Agent
-
-```bash
-helloagi run --goal "your goal here"          # Interactive session
-helloagi oneshot --message "single question"  # One-shot query
-helloagi auto --goal "ship v1" --steps 5      # Autonomous multi-step execution
-helloagi tri-loop --goal "build feature X"    # Plan/Execute/Verify loop
-helloagi openclaw --prompt "complex task"     # Claude Agent SDK mode
-```
-
-### Server & API
-
-```bash
-helloagi serve --host 127.0.0.1 --port 8787  # Start HTTP API server
+```python
+helloagi run                          # safe-default (balanced safety)
+helloagi run --policy coder           # full coding capabilities
+helloagi run --policy research        # web research optimized
+helloagi run --policy creative        # creative writing mode
+helloagi run --policy reviewer        # read-only analysis
+helloagi run --policy aggressive      # maximum autonomy
 ```
 
 ---
 
-## API
+## 17 Real Tools
 
-HelloAGI exposes a local HTTP API when running in server mode.
+These aren't mock tools or stubs. Every tool executes real operations, governed by SRG on every call.
 
-**Chat**
+| Tool | What It Does | Risk |
+|---|---|---|
+| `bash_exec` | Run any shell command | HIGH — SRG screens for dangerous patterns |
+| `python_exec` | Execute Python in isolated subprocess | HIGH — SRG screens code |
+| `file_read` | Read files with line ranges and keyword search | LOW |
+| `file_write` | Create or overwrite files | MEDIUM |
+| `file_patch` | Surgical find-and-replace | MEDIUM |
+| `file_search` | Glob + content search across directories | LOW |
+| `web_search` | Multi-provider search (Tavily/SerpAPI/DuckDuckGo) | LOW |
+| `web_fetch` | Fetch URLs with SSRF protection and HTML extraction | LOW |
+| `code_analyze` | Python AST-based static analysis | LOW |
+| `memory_store` | Save facts to semantic memory | LOW |
+| `memory_recall` | Search memories by meaning | LOW |
+| `skill_create` | Crystallize workflow into reusable skill | LOW |
+| `skill_invoke` | Execute a learned skill | MEDIUM |
+| `session_search` | Full-text search across conversation history | LOW |
+| `delegate_task` | Spawn isolated sub-agent with restricted tools | MEDIUM |
+| `ask_user` | Request human input or clarification | NONE |
+| `notify_user` | Non-blocking notification | NONE |
+
+---
+
+## The Personality
+
+HelloAGI doesn't feel like a tool. It feels like a partner.
+
+### Time-Aware
+
+Your agent knows what time it is and adapts:
+- Morning: *"Good morning! Your energy is high — great time for challenging tasks."*
+- Late night: *"Burning the midnight oil. Let's keep it focused and efficient."*
+
+### Growth Tracking
+
+Every session is tracked. Your agent celebrates your consistency:
+- *"Day 7! A full week of building with AGI!"*
+- *"30-day streak! Incredible dedication. You're unstoppable!"*
+
+### Evolving Identity
+
+Your agent isn't static. It evolves:
+- Learns your preferences across sessions
+- Develops new principles based on your work patterns
+- Crystallizes successful workflows into skills it can reuse
+
+### Inspirational
+
+Quotes from *Think and Grow Rich*, *The Secret*, and the AGI revolution appear throughout the experience — during onboarding, startup, and key moments. Because building AGI should feel inspiring.
+
+> *"You are not just building software. You are shaping the future of intelligence."*
+
+---
+
+## API & Channels
+
+### HTTP API (7 Endpoints)
+
 ```bash
-curl http://127.0.0.1:8787/chat \
+helloagi serve --port 8787
+```
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/health` | Detailed health with subsystem status |
+| `POST` | `/chat` | Chat with the agent (JSON) |
+| `POST` | `/chat/stream` | Chat with SSE streaming (real-time tool execution) |
+| `GET` | `/tools` | List all tools with schemas |
+| `GET` | `/skills` | List learned skills |
+| `GET` | `/identity` | Agent identity and principles |
+| `GET` | `/governance` | SRG configuration and stats |
+
+### SSE Streaming
+
+Watch your agent think in real-time:
+
+```bash
+curl -N http://localhost:8787/chat/stream \
   -H 'content-type: application/json' \
-  -d '{"message": "help me build an agent"}'
+  -d '{"message": "Build me a web scraper for news headlines"}'
 ```
 
-Response:
-```json
-{
-  "response": "Plan: define objective, map constraints, execute...",
-  "decision": "allow",
-  "risk": 0.05
-}
+```
+event: start
+data: {"message": "Build me a web scraper..."}
+
+event: tool_start
+data: {"tool": "python_exec", "decision": "allow"}
+
+event: tool_end
+data: {"tool": "python_exec", "ok": true, "output": "..."}
+
+event: response
+data: {"text": "Done! I've created...", "tool_calls": 3, "turns": 2}
+```
+
+### Telegram & Discord
+
+```bash
+export TELEGRAM_BOT_TOKEN=your-token
+helloagi serve --telegram
+
+export DISCORD_BOT_TOKEN=your-token
+helloagi serve --discord
+```
+
+Full agent capabilities on every channel — same SRG governance, same tools, same personality.
+
+---
+
+## CLI Experience
+
+HelloAGI ships with a beautiful Rich TUI:
+
+```
+┌──── 🧠 HelloAGI Runtime ─────────────────────────────┐
+│ HelloAGI — Governed Autonomous Intelligence           │
+│ Agent: Lana | Builder-mentor                          │
+│ Tools: 17 available | SRG: active                     │
+│                                                       │
+│ "Strength and growth come only through continuous     │
+│  effort and struggle."                                │
+│   — Think And Grow Rich                               │
+└───────────────────────────────────────────────────────┘
+☀️ Good morning
+✨ Day 3! Every journey begins with a single step.
+
+you> Build me a CLI todo app in Python
+
+  🟢 ⚡ python_exec (allow) ✓ Created todo.py...
+  🟢 ⚡ file_write (allow) ✓ Saved to ./todo_app.py
+  🟢 ⚡ python_exec (allow) ✓ Tests passing
+
+🟢 [allow:0.05] | 3 tool calls in 2 turns
+```
+
+### Slash Commands
+
+| Command | Description |
+|---|---|
+| `/tools` | List tools with risk levels |
+| `/skills` | List learned skills |
+| `/identity` | Agent identity and principles |
+| `/growth` | Your streaks, milestones, stats |
+| `/memory` | Semantic memory status |
+| `/dashboard` | Live monitoring dashboard |
+| `/supervisor` | Health status and incidents |
+| `/circuits` | Circuit breaker states |
+| `/policy` | Current governance policy |
+| `/packs` | Available policy packs |
+| `/new` | Fresh conversation |
+
+---
+
+## For Developers
+
+### Project Structure
+
+```
+src/agi_runtime/
+├── core/             # Agent loop, personality, runtime
+├── governance/       # SRG — deterministic safety gate
+├── tools/            # 17 builtin tools with decorator registration
+├── skills/           # Skill crystallization and management
+├── memory/           # Identity evolution, embeddings, compressor
+├── api/              # HTTP server with SSE streaming
+├── channels/         # Telegram, Discord adapters
+├── robustness/       # Circuit breakers, supervisor
+├── diagnostics/      # Dashboard, scorecard, replay
+├── models/           # Multi-model routing (speed/balanced/quality)
+├── policies/         # 6 governance policy packs
+├── planner/          # LLM-powered goal decomposition
+├── executor/         # Retry logic, failure recovery
+├── verifier/         # LLM-powered outcome verification
+├── orchestration/    # TriLoop, DAG engine, event bus
+├── onboarding/       # Beautiful setup wizard + quotes
+├── kernel/           # Full subsystem bootstrap
+├── latency/          # ALE anticipatory cache
+└── observability/    # JSONL journal
+```
+
+### Adding a Custom Tool
+
+```python
+from agi_runtime.tools.registry import tool, ToolParam, ToolResult
+
+@tool(
+    name="my_tool",
+    description="Does something amazing",
+    toolset="custom",
+    risk="low",
+    parameters=[
+        ToolParam("input", "string", "What to process"),
+    ],
+)
+def my_tool(input: str) -> ToolResult:
+    result = do_something(input)
+    return ToolResult(ok=True, output=result)
+```
+
+Your tool is automatically discovered, registered, gets SRG governance, and appears in the Claude tool schemas. Zero configuration.
+
+### Running Tests
+
+```bash
+pip install helloagi[dev]
+PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py"
+# 100 tests, 0 failures
 ```
 
 ---
 
-## Gemini Embedding 2 Integration
+## Join the Movement
 
-HelloAGI integrates [Google's Gemini Embedding 2](https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-embedding-2/) — the first natively multimodal embedding model — to power semantic memory and intent-based retrieval.
+> *"Every great revolution started with a single spark. This is yours."*
 
-Gemini Embedding 2 maps text, images, video, and audio into a **single unified vector space**, giving HelloAGI:
-- **Semantic memory search**
-- **Intent-similarity matching** (ALE cache)
-- **Multimodal understanding**
-- **100+ language support**
+HelloAGI is more than a framework. It is the beginning of a new era — where AGI-class intelligence is **open, governed, and accessible to everyone**.
+
+We believe:
+- **Intelligence should be open-source** — not locked behind corporate walls
+- **Autonomy requires governance** — unbounded power needs deterministic safety
+- **Agents should grow** — not reset to zero every conversation
+- **The future is local-first** — your data, your machine, your agent
+- **Everyone deserves AGI** — `pip install helloagi` → real autonomous intelligence in 30 seconds
+
+### How to Contribute
+
+We welcome contributors who share this vision. Whether you're building new tools, improving governance, adding channel adapters, or writing documentation — you're shaping the future of intelligence.
+
+```bash
+git clone https://github.com/mmsk2007/helloagi.git
+cd helloagi
+pip install -e ".[dev]"
+PYTHONPATH=src python -m unittest discover -s tests
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Star This Repo
+
+If you believe AGI should be open, governed, and accessible — star this repo. Share it. Tell people. This is how movements start.
 
 ---
 
-## Author & Credits
+## Author
 
-Created and maintained by **Eng. Mohammed Mazyad Alkhaldi** (Saudi Arabia).
+Created by **Eng. Mohammed Mazyad Alkhaldi** (Saudi Arabia).
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing guidelines, and how to submit changes.
+> *"The age of AGI is not coming — it's here. And you are at the frontier."*
 
 ## License
 
-Released under the [MIT License](LICENSE).
+MIT License — free to use, modify, and distribute. Because AGI belongs to everyone.

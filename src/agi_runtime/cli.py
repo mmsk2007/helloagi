@@ -51,21 +51,36 @@ def _risk_bar(risk: float) -> str:
 
 def run_rich(goal: str, config_path: str):
     """Run interactive session with Rich TUI."""
+    # Auto-onboard on first run
+    from agi_runtime.onboarding.wizard import is_onboarded, run_wizard
+    if not is_onboarded():
+        run_wizard()
+
     settings = load_settings(config_path)
     agent = HelloAGIAgent(settings)
 
     if _RICH_AVAILABLE:
         console = Console()
 
-        # Banner
+        # Banner with inspirational quote
+        from agi_runtime.onboarding.quotes import get_random_quote
+        quote, source = get_random_quote()
+
         console.print(Panel(
             f"[bold cyan]HelloAGI[/bold cyan] — [dim]Governed Autonomous Intelligence[/dim]\n"
             f"[dim]Agent: {agent.identity.state.name} | {agent.identity.state.character}[/dim]\n"
-            f"[dim]Tools: {len(agent.tool_registry.list_tools())} available | SRG: active[/dim]",
+            f"[dim]Tools: {len(agent.tool_registry.list_tools())} available | SRG: active[/dim]\n\n"
+            f"[dim italic magenta]\"{quote}\"[/dim italic magenta]\n"
+            f"[dim italic]  — {source}[/dim italic]",
             title="🧠 HelloAGI Runtime",
             border_style="cyan",
         ))
-        console.print(f"[dim]Goal: {goal}[/dim]")
+        # Growth tracking
+        from agi_runtime.core.personality import get_time_greeting
+        greeting, energy, icon = get_time_greeting()
+        streak_msg = agent.growth.get_streak_message()
+        console.print(f"[dim]{icon} {greeting}[/dim]")
+        console.print(f"[dim]{streak_msg}[/dim]")
         console.print(f"[dim]Type /help for commands, /tools to see tools, exit to quit[/dim]\n")
 
         # Set up tool execution callbacks
@@ -139,6 +154,9 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
             "  /new       — Start fresh conversation\n"
             "  /policy    — Show current governance policy\n"
             "  /packs     — List available policy packs\n"
+            "  /growth    — Show your growth stats and streaks\n"
+            "  /mood      — Show mood tracking and emotional intelligence\n"
+            "  /patterns  — Show detected behavioral patterns\n"
             "  /dashboard — Show live monitoring dashboard\n"
             "  /supervisor— Show supervisor health status\n"
             "  /circuits  — Show circuit breaker states\n"
@@ -229,6 +247,33 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
                 console.print(line)
             else:
                 print(line)
+
+    elif command == "/growth":
+        summary = agent.growth.get_growth_summary()
+        streak_msg = agent.growth.get_streak_message()
+        info = f"{streak_msg}\n\n{summary}"
+        if _RICH_AVAILABLE and console:
+            console.print(Panel(info, title="Your Growth", border_style="green"))
+        else:
+            print(info)
+
+    elif command == "/mood":
+        summary = agent.sentiment.get_summary()
+        guidance = agent.sentiment.get_mood_guidance()
+        info = summary
+        if guidance:
+            info += f"\n\nGuidance: {guidance}"
+        if _RICH_AVAILABLE and console:
+            console.print(Panel(info, title="Mood & Emotional Intelligence", border_style="magenta"))
+        else:
+            print(info)
+
+    elif command == "/patterns":
+        insights = agent.patterns.get_insights()
+        if _RICH_AVAILABLE and console:
+            console.print(Panel(insights, title="Behavioral Patterns", border_style="blue"))
+        else:
+            print(insights)
 
     elif command == "/dashboard":
         from agi_runtime.diagnostics.dashboard import DashboardStats, render_dashboard
@@ -476,7 +521,7 @@ def main():
             "  helloagi serve --port 8787\n"
         ),
     )
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    sub = parser.add_subparsers(dest="cmd")
 
     initp = sub.add_parser("init", help="initialize config")
     initp.add_argument("--config", default="helloagi.json")
@@ -541,6 +586,11 @@ def main():
     dashp.add_argument("--config", default="helloagi.json")
 
     args = parser.parse_args()
+
+    # Default: no subcommand → run interactive session
+    if not args.cmd:
+        run_rich("general assistant", "helloagi.json")
+        return
 
     if args.cmd == "init":
         init_config(args.config)

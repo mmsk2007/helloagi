@@ -19,7 +19,7 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from agi_runtime.governance.srg import SRGGovernor, GovernanceResult
 from agi_runtime.latency.ale import ALEngine
@@ -31,6 +31,10 @@ from agi_runtime.skills.manager import SkillManager
 from agi_runtime.memory.compressor import ContextCompressor
 from agi_runtime.robustness.circuit_breaker import CircuitBreaker
 from agi_runtime.supervisor.supervisor import Supervisor
+from agi_runtime.core.personality import GrowthTracker, build_personality_prompt, get_time_greeting
+from agi_runtime.intelligence.sentiment import SentimentTracker
+from agi_runtime.intelligence.context_compiler import ContextCompiler
+from agi_runtime.intelligence.patterns import PatternDetector
 
 try:
     import anthropic as _anthropic_lib
@@ -82,6 +86,10 @@ class HelloAGIAgent:
         self.compressor = ContextCompressor()
         self.circuit_breaker = CircuitBreaker(failure_threshold=5, cooldown_seconds=60.0)
         self.supervisor = Supervisor(pause_consecutive=5, pause_rate=0.5)
+        self.growth = GrowthTracker()
+        self.sentiment = SentimentTracker()
+        self.context_compiler = ContextCompiler()
+        self.patterns = PatternDetector()
 
         # Initialize tool registry and discover all builtin tools
         self.tool_registry = ToolRegistry.get_instance()
@@ -102,10 +110,10 @@ class HelloAGIAgent:
             self._claude = _anthropic_lib.Anthropic()
 
         # Callbacks (set by CLI/API layer)
-        self.on_user_input: Optional[callable] = None
-        self.on_stream: Optional[callable] = None
-        self.on_tool_start: Optional[callable] = None
-        self.on_tool_end: Optional[callable] = None
+        self.on_user_input: Optional[Callable] = None
+        self.on_stream: Optional[Callable] = None
+        self.on_tool_start: Optional[Callable] = None
+        self.on_tool_end: Optional[Callable] = None
 
     @property
     def embedding_store(self):
@@ -148,6 +156,34 @@ class HelloAGIAgent:
             "to save the workflow as a reusable skill for future similar requests.",
             "Before starting a task, check if skill_invoke can help with an existing skill.",
         ]
+
+        # Inject personality and growth awareness
+        personality = build_personality_prompt(
+            identity_name=identity.name,
+            identity_character=identity.character,
+            growth=self.growth,
+        )
+        if personality:
+            parts.append("")
+            parts.append("<personality>")
+            parts.append(personality)
+            parts.append("</personality>")
+
+        # Inject emotional intelligence (mood-aware responses)
+        mood_guidance = self.sentiment.get_mood_guidance()
+        if mood_guidance:
+            parts.append("")
+            parts.append("<emotional-context>")
+            parts.append(mood_guidance)
+            parts.append("</emotional-context>")
+
+        # Inject behavioral patterns (learned preferences)
+        pattern_context = self.patterns.get_personalization_prompt()
+        if pattern_context:
+            parts.append("")
+            parts.append("<user-patterns>")
+            parts.append(pattern_context)
+            parts.append("</user-patterns>")
 
         # Inject skill index
         skills_index = self.skills.get_skills_index()
@@ -359,6 +395,11 @@ class HelloAGIAgent:
     async def _think_async(self, user_input: str) -> AgentResponse:
         """The full agentic loop — the beating heart of HelloAGI."""
 
+        # 0. Track growth & detect mood
+        self.growth.record_session()
+        self.growth.record_message()
+        self._mood = self.sentiment.record(user_input)
+
         # 1. Evolve identity based on observation
         self.identity.evolve(user_input)
         self.journal.write("input", {"text": user_input})
@@ -442,6 +483,10 @@ class HelloAGIAgent:
                 # Auto-store to memory
                 self._auto_store_memory(user_input, final_text)
 
+                # Record behavioral patterns
+                tools_used = [tc["tool"] for tc in self._session_tool_calls]
+                self.patterns.record_interaction(user_input, tools_used)
+
                 self.journal.write("response", {
                     "decision": gov.decision,
                     "risk": gov.risk,
@@ -464,6 +509,7 @@ class HelloAGIAgent:
             tool_results = []
             for tc in tool_calls:
                 total_tool_calls += 1
+                self.growth.record_tool_call()
 
                 # Special handling: delegate_task spawns a real sub-agent
                 if tc.name == "delegate_task" and self._claude:

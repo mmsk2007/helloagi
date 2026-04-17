@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='helloagi',
-    version='0.4.0',
+    version='0.5.0',
     description='The first open-source AGI runtime with governed autonomy, evolving identity, and anticipatory intelligence.',
     long_description=open('README.md', encoding='utf-8').read(),
     long_description_content_type='text/markdown',
@@ -16,11 +16,21 @@ setup(
     install_requires=[
         'anthropic>=0.30',
         'anyio>=4.0',
-        'google-genai>=1.0',
+        'requests>=2.28',
     ],
     extras_require={
+        'rich': ['rich>=13.0'],
+        'telegram': ['python-telegram-bot>=20.0'],
+        'discord': ['discord.py>=2.0'],
+        'embeddings': ['google-genai>=1.0'],
         'claude-sdk': ['claude-agent-sdk>=0.1'],
-        'all': ['claude-agent-sdk>=0.1'],
+        'all': [
+            'rich>=13.0',
+            'python-telegram-bot>=20.0',
+            'discord.py>=2.0',
+            'google-genai>=1.0',
+            'claude-agent-sdk>=0.1',
+        ],
         'dev': ['pytest>=7.0', 'pytest-asyncio>=0.21'],
     },
     entry_points={
@@ -40,4 +50,5 @@ setup(
         'Topic :: Scientific/Engineering :: Artificial Intelligence',
         'Topic :: Software Development :: Libraries :: Application Frameworks',
     ],
+    keywords='agi agent autonomous governance safety tools llm claude',
 )

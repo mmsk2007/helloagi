@@ -5,6 +5,8 @@ which model tier to use, and what identity traits the agent should exhibit.
 This transforms policy packs into full agent personas.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 from typing import List, Optional
 

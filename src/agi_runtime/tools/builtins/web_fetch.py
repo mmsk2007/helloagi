@@ -16,6 +16,11 @@ from agi_runtime.tools.registry import tool, ToolParam, ToolResult
     ],
 )
 def web_fetch(url: str, max_length: int = 10000) -> ToolResult:
+    # SSRF protection: block internal/private network addresses
+    ssrf_error = _check_ssrf(url)
+    if ssrf_error:
+        return ToolResult(ok=False, output="", error=ssrf_error)
+
     try:
         import requests
     except ImportError:
@@ -53,6 +58,41 @@ def web_fetch(url: str, max_length: int = 10000) -> ToolResult:
 
     except Exception as e:
         return ToolResult(ok=False, output="", error=f"Fetch failed: {e}")
+
+
+def _check_ssrf(url: str) -> str:
+    """Block requests to internal/private network addresses."""
+    from urllib.parse import urlparse
+    try:
+        parsed = urlparse(url)
+        scheme = parsed.scheme.lower()
+        host = parsed.hostname or ""
+
+        if scheme not in ("http", "https"):
+            return f"Blocked: only http/https schemes allowed, got '{scheme}'"
+
+        # Block obviously internal hostnames
+        blocked_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
+        if host.lower() in blocked_hosts:
+            return f"Blocked: cannot fetch internal address '{host}'"
+
+        # Block private IP ranges
+        import ipaddress
+        try:
+            ip = ipaddress.ip_address(host)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                return f"Blocked: cannot fetch private/internal IP '{host}'"
+        except ValueError:
+            pass  # hostname, not IP — OK
+
+        # Block internal-looking hostnames
+        if host.endswith(".local") or host.endswith(".internal"):
+            return f"Blocked: cannot fetch internal hostname '{host}'"
+
+    except Exception:
+        return "Blocked: failed to parse URL"
+
+    return ""  # No SSRF risk detected
 
 
 def _extract_text_from_html(html: str) -> str:

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from agi_runtime.scheduler.scheduler import AgentScheduler
 

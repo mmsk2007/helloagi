@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, asdict
 from agi_runtime.memory.character_genesis import CharacterSeed, build_initial_character
 from pathlib import Path
