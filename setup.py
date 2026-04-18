@@ -16,6 +16,7 @@ setup(
     install_requires=[
         'anthropic>=0.30',
         'anyio>=4.0',
+        'croniter>=2.0',
         'requests>=2.28',
     ],
     extras_require={

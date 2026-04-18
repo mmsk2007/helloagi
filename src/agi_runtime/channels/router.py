@@ -39,6 +39,10 @@ class ChannelRouter:
                 # Do not use return_exceptions=True — it hides startup failures (e.g. bad
                 # token) and the process exits right after "HTTP API listening" with no trace.
                 await asyncio.gather(*tasks)
+            for channel in self._channels.values():
+                bg_start = getattr(channel, "start_background_tasks", None)
+                if callable(bg_start):
+                    await bg_start()
             # PTB v22+: Updater.start_polling() returns once background polling is running
             # (it no longer blocks). Discord bot.start() still blocks. If every channel's
             # start() has already returned, we must keep the loop alive until Ctrl+C/cancel.
@@ -63,6 +67,9 @@ class ChannelRouter:
         """Stop all channels gracefully."""
         for name, channel in self._channels.items():
             try:
+                bg_stop = getattr(channel, "stop_background_tasks", None)
+                if callable(bg_stop):
+                    await bg_stop()
                 await channel.stop()
                 logger.info(f"Stopped channel: {name}")
             except Exception as e:

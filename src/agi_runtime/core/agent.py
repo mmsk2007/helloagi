@@ -234,6 +234,7 @@ class HelloAGIAgent:
             "After completing a complex multi-step task successfully, consider using skill_create",
             "to save the workflow as a reusable skill for future similar requests.",
             "Before starting a task, check if skill_invoke can help with an existing skill.",
+            "When the user asks to be reminded later, prefer reminder_create/reminder_list/reminder_cancel/reminder_pause/reminder_resume/reminder_run_now.",
             "",
             "Conversational norms:",
             "- Sound natural and human; avoid robotic section headers in normal chat.",

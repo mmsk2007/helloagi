@@ -24,6 +24,9 @@ from typing import Optional
 from agi_runtime.channels.base import BaseChannel, ChannelMessage, ChannelResponse
 from agi_runtime.config.env import load_local_env
 from agi_runtime.core.agent import HelloAGIAgent
+from agi_runtime.reminders.service import ReminderService
+from agi_runtime.reminders.store import ReminderStore
+from agi_runtime.reminders.ticker import ReminderTicker
 
 logger = logging.getLogger("helloagi.telegram")
 
@@ -43,6 +46,8 @@ class TelegramChannel(BaseChannel):
         self.token = token or _load_telegram_token()
         self._app = None
         self._pending_approvals: dict = {}  # message_id -> callback
+        self._reminder_service = ReminderService()
+        self._reminder_ticker: ReminderTicker | None = None
 
     def _principal_id_for_update(self, update) -> str:
         """Build a stable principal id for Telegram chats."""
@@ -100,6 +105,12 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("identity", self._cmd_identity))
         self._app.add_handler(CommandHandler("new", self._cmd_new))
         self._app.add_handler(CommandHandler("help", self._cmd_help))
+        self._app.add_handler(CommandHandler("remind", self._cmd_remind))
+        self._app.add_handler(CommandHandler("reminders", self._cmd_reminders))
+        self._app.add_handler(CommandHandler("reminder_cancel", self._cmd_reminder_cancel))
+        self._app.add_handler(CommandHandler("reminder_pause", self._cmd_reminder_pause))
+        self._app.add_handler(CommandHandler("reminder_resume", self._cmd_reminder_resume))
+        self._app.add_handler(CommandHandler("reminder_run_now", self._cmd_reminder_run_now))
         self._app.add_handler(CallbackQueryHandler(self._handle_approval))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
 
@@ -107,15 +118,40 @@ class TelegramChannel(BaseChannel):
         await self._app.initialize()
         await self._app.start()
         await self._app.updater.start_polling()
+        await self.start_background_tasks()
         logger.info("Telegram bot started")
 
     async def stop(self):
         """Stop the Telegram bot."""
         if self._app:
+            await self.stop_background_tasks()
             await self._app.updater.stop()
             await self._app.stop()
             await self._app.shutdown()
             logger.info("Telegram bot stopped")
+
+    async def start_background_tasks(self):
+        if not self._app:
+            return
+        if self._reminder_ticker:
+            return
+
+        async def dispatch(job):
+            await self._app.bot.send_message(
+                chat_id=int(job.chat_id),
+                text=f"⏰ Reminder ({job.id}): {job.message}",
+            )
+
+        self._reminder_ticker = ReminderTicker(
+            store=ReminderStore(),
+            dispatch=dispatch,
+        )
+        await self._reminder_ticker.start()
+
+    async def stop_background_tasks(self):
+        if self._reminder_ticker:
+            await self._reminder_ticker.stop()
+            self._reminder_ticker = None
 
     async def send(self, channel_id: str, text: str, **kwargs):
         """Send a message to a Telegram chat."""
@@ -141,6 +177,13 @@ class TelegramChannel(BaseChannel):
             f"/identity — Who am I\n"
             f"/new — Fresh conversation\n"
             f"/help — Help\n\n"
+            f"Reminder commands:\n"
+            f"/remind <schedule> | <message>\n"
+            f"/reminders\n"
+            f"/reminder_cancel <id>\n"
+            f"/reminder_pause <id>\n"
+            f"/reminder_resume <id>\n"
+            f"/reminder_run_now <id>\n\n"
             f"Just send me a message and I'll get to work!",
         )
 
@@ -183,8 +226,70 @@ class TelegramChannel(BaseChannel):
             "Send me any message and I'll work on it using my tools.\n\n"
             "I can: run code, read/write files, search the web, analyze code, "
             "and more — all governed by SRG safety.\n\n"
-            "If I need to do something risky, I'll ask for your approval.",
+            "If I need to do something risky, I'll ask for your approval.\n\n"
+            "Reminders:\n"
+            "- /remind in 30m | stretch and drink water\n"
+            "- /remind tomorrow 9am | standup prep\n"
+            "- /remind cron:0 9 * * * | daily planning\n"
+            "- /reminders, /reminder_cancel <id>, /reminder_pause <id>, /reminder_resume <id>\n"
+            "- /reminder_run_now <id>",
         )
+
+    async def _cmd_remind(self, update, context):
+        principal_id = self._principal_id_for_update(update)
+        raw = " ".join(context.args or []).strip()
+        if not raw or "|" not in raw:
+            await update.message.reply_text(
+                "Usage: /remind <schedule> | <message>\n"
+                "Examples:\n"
+                "- /remind in 30m | check deployment\n"
+                "- /remind tomorrow 9am | standup prep\n"
+                "- /remind cron:0 9 * * * | daily planning"
+            )
+            return
+        schedule, message = [x.strip() for x in raw.split("|", 1)]
+        if not schedule or not message:
+            await update.message.reply_text("Both schedule and message are required.")
+            return
+        res = self._reminder_service.create(
+            principal_id=principal_id,
+            message=message,
+            schedule=schedule,
+        )
+        await update.message.reply_text(res.message)
+
+    async def _cmd_reminders(self, update, context):
+        principal_id = self._principal_id_for_update(update)
+        text = self._reminder_service.list_for_principal(principal_id)
+        await update.message.reply_text(text)
+
+    async def _cmd_reminder_cancel(self, update, context):
+        principal_id = self._principal_id_for_update(update)
+        if not context.args:
+            await update.message.reply_text("Usage: /reminder_cancel <id>")
+            return
+        await update.message.reply_text(self._reminder_service.cancel(principal_id, context.args[0].strip()))
+
+    async def _cmd_reminder_pause(self, update, context):
+        principal_id = self._principal_id_for_update(update)
+        if not context.args:
+            await update.message.reply_text("Usage: /reminder_pause <id>")
+            return
+        await update.message.reply_text(self._reminder_service.pause(principal_id, context.args[0].strip()))
+
+    async def _cmd_reminder_resume(self, update, context):
+        principal_id = self._principal_id_for_update(update)
+        if not context.args:
+            await update.message.reply_text("Usage: /reminder_resume <id>")
+            return
+        await update.message.reply_text(self._reminder_service.resume(principal_id, context.args[0].strip()))
+
+    async def _cmd_reminder_run_now(self, update, context):
+        principal_id = self._principal_id_for_update(update)
+        if not context.args:
+            await update.message.reply_text("Usage: /reminder_run_now <id>")
+            return
+        await update.message.reply_text(self._reminder_service.run_now(principal_id, context.args[0].strip()))
 
     # ── Message Handler ───────────────────────────────────────
 
