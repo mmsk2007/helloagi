@@ -162,7 +162,18 @@ For Discord:
 helloagi onboard
 ```
 
-The interactive wizard configures agent identity, timezone, model tier, provider keys, and optional Telegram/Discord bot tokens. Non-secret onboarding state is saved to `helloagi.onboard.json`; secrets are written to local `.env`.
+The interactive wizard now does the full runtime setup:
+
+- agent identity and focus
+- runtime mode (`cli`, `hybrid`, or `service`)
+- active provider selection (`template`, `anthropic`, or `google`)
+- provider auth mode (`api_key` or `auth_token`)
+- optional OpenAI credential storage for future adapters/tools
+- Telegram and Discord channel enablement
+- local service auth token (`HELLOAGI_API_KEY`)
+- optional migration import from OpenClaw or Hermes
+
+Non-secret onboarding state is saved to `helloagi.onboard.json`; secrets are written to local `.env`.
 
 ### 2. Initialize runtime config
 
@@ -177,10 +188,12 @@ Creates `helloagi.json` with default mission, style, domain, and file paths.
 ```bash
 cp .env.example .env
 # Edit .env:
-#   ANTHROPIC_API_KEY=sk-ant-...
-#   OPENAI_API_KEY=sk-...        (optional)
-#   GOOGLE_API_KEY=...           (optional)
-#   TELEGRAM_BOT_TOKEN=...       (optional)
+#   ANTHROPIC_API_KEY=sk-ant-...      or ANTHROPIC_AUTH_TOKEN=...
+#   OPENAI_API_KEY=sk-...             or OPENAI_AUTH_TOKEN=...   (optional)
+#   GOOGLE_API_KEY=...                or GOOGLE_AUTH_TOKEN=...   (optional)
+#   TELEGRAM_BOT_TOKEN=...            (optional)
+#   DISCORD_BOT_TOKEN=...             (optional)
+#   HELLOAGI_API_KEY=...              (service/dashboard auth)
 source .env
 ```
 
@@ -265,7 +278,7 @@ curl -s http://127.0.0.1:8787/chat \
 | **`python -m agi_runtime.cli` fails with “No module named agi_runtime”** | Install the package into the **same** Python you are invoking: `pip install -e ".[rich,telegram]"` or `pip install "helloagi[rich,telegram]"`. |
 | `command not found: helloagi` | Run `python -m agi_runtime.cli run`, then add Python's user scripts directory to PATH |
 | `ModuleNotFoundError: anthropic` | Run `pip install anthropic` |
-| Agent returns template responses | Set `ANTHROPIC_API_KEY` for Claude backbone |
+| Agent returns template responses | Re-run `helloagi onboard` and choose Anthropic or Google, or set `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` |
 | Doctor shows missing files | Run `helloagi init` first |
 | Service is installed but not reachable | Run `helloagi service status` then `helloagi health` |
 | Channel will not start | Run `helloagi extensions doctor` and verify missing env or missing extras |

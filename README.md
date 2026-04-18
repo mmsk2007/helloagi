@@ -90,6 +90,17 @@ Docs by goal:
 
 ### What Happens During Install + First Run
 
+The installer launches a real setup flow immediately. The wizard now covers:
+
+- environment detection and optional OpenClaw/Hermes import
+- agent identity and focus
+- runtime mode: `cli`, `hybrid`, or `service`
+- active provider choice: `template`, `anthropic`, or `google`
+- provider auth mode: `api_key` or `auth_token`
+- Telegram and Discord enablement
+- local service auth token generation with `HELLOAGI_API_KEY`
+- readiness checks and exact next commands
+
 ```
   ╦ ╦╔═╗╦  ╦  ╔═╗╔═╗╔═╗╦  v0.5.0
   ╠═╣║╣ ║  ║  ║ ║╠═╣║ ╦║
@@ -139,6 +150,7 @@ helloagi extensions doctor                      # Check extension readiness
 helloagi extensions enable telegram             # Persistently enable Telegram extension
 helloagi runs list                              # Inspect orchestration runs
 helloagi runs show <run-id>                     # Inspect a workflow run
+helloagi onboard-status                         # Show saved + live runtime readiness
 helloagi dashboard                              # Live monitoring dashboard
 helloagi tools                                  # List all 17 tools
 helloagi skills                                 # List learned skills
@@ -208,7 +220,9 @@ cd helloagi
    helloagi onboard
    ```
 
-   Paste the token when asked (or add `TELEGRAM_BOT_TOKEN=...` to `.env` later). Set **ANTHROPIC_API_KEY** in `.env` (or during onboarding) so the agent can reply with Claude.
+   The wizard can import an existing OpenClaw/Hermes setup, choose the active provider (`template`, `anthropic`, or `google`), accept `api_key` or `auth_token` auth modes, generate `HELLOAGI_API_KEY` for the local service, and enable Telegram/Discord in the same flow.
+
+   Paste the Telegram token when asked (or add `TELEGRAM_BOT_TOKEN=...` to `.env` later). For model-backed replies, choose Anthropic or Google during onboarding and provide either the API key or auth token for that provider.
 
 5. **Initialize config** if you skipped it: `helloagi init` (wizard may already create `helloagi.json`).
 
@@ -239,6 +253,8 @@ cd helloagi
 ### Platform, Service, and Secret Model
 
 - Secrets live in environment variables and local `.env`.
+- Supported provider secret forms: `*_API_KEY` and `*_AUTH_TOKEN`.
+- `HELLOAGI_API_KEY` is the shared auth token for the local API, dashboard, and service-aware clients.
 - `helloagi.onboard.json` stores onboarding metadata only, not provider or channel secrets.
 - Channels are optional extensions. Use `helloagi extensions doctor` to check readiness.
 - `helloagi serve` and `helloagi service install` honor persistently enabled channel extensions.

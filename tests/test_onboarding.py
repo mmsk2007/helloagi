@@ -12,6 +12,8 @@ class TestOnboarding(unittest.TestCase):
         d = _to_dict(cfg)
         self.assertIn("agent_name", d)
         self.assertIn("providers", d)
+        self.assertIn("service", d)
+        self.assertEqual(d["providers"]["active_provider"], "template")
 
     def test_write_file(self):
         with tempfile.TemporaryDirectory() as td:

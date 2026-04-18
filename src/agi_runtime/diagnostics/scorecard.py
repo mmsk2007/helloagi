@@ -7,6 +7,8 @@ import os
 import sqlite3
 import time
 
+from agi_runtime.config.providers import provider_env_snapshot
+
 
 @dataclass
 class Check:
@@ -96,31 +98,41 @@ def _check_journal_health(journal_path: str) -> Check:
 
 
 def _check_provider_readiness(onboard: dict | None) -> Check:
-    provider_keys = {
-        "openai": "OPENAI_API_KEY",
-        "anthropic": "ANTHROPIC_API_KEY",
-        "google": "GOOGLE_API_KEY",
-    }
     providers = onboard.get("providers", {}) if isinstance(onboard, dict) else {}
-
-    configured = sorted(
-        provider
-        for provider, env_name in provider_keys.items()
-        if isinstance(providers, dict) and providers.get(f"{provider}_api_key")
-    )
-    env_ready = sorted(provider for provider, env_name in provider_keys.items() if os.environ.get(env_name))
-
+    env_snapshot = provider_env_snapshot()
+    configured: list[str] = []
+    for provider in ("openai", "anthropic", "google"):
+        if not isinstance(providers, dict):
+            continue
+        if providers.get(f"{provider}_api_key") or providers.get(f"{provider}_auth_token"):
+            configured.append(provider)
+    env_ready = sorted(provider for provider, state in env_snapshot.items() if state.get("configured"))
     available = sorted(set(configured) | set(env_ready))
-    runtime_backbone_ready = "anthropic" in env_ready
+    explicit_active_provider = providers.get("active_provider") if isinstance(providers, dict) else None
+    active_provider = explicit_active_provider or "template"
+    active_auth_mode = providers.get("active_auth_mode", "none") if isinstance(providers, dict) else "none"
+    explicit_template = explicit_active_provider == "template"
+    if "anthropic" in env_ready:
+        runtime_backbone = "anthropic-ready"
+    elif active_provider == "google" and "google" in env_ready:
+        runtime_backbone = "google-ready"
+    elif explicit_template:
+        runtime_backbone = "template-only"
+    elif active_provider in {"anthropic", "google"}:
+        runtime_backbone = f"{active_provider}-missing"
+    else:
+        runtime_backbone = "anthropic-missing"
 
     detail_parts = [
         "available=" + (", ".join(available) if available else "none"),
         "configured=" + (", ".join(configured) if configured else "none"),
         "env=" + (", ".join(env_ready) if env_ready else "none"),
-        "runtime_backbone=" + ("anthropic-ready" if runtime_backbone_ready else "anthropic-missing"),
+        f"active={active_provider}",
+        f"auth_mode={active_auth_mode}",
+        "runtime_backbone=" + runtime_backbone,
     ]
 
-    ok = bool(available)
+    ok = bool(available) or explicit_template
     return Check("providers", ok, ", ".join(detail_parts))
 
 

@@ -13,12 +13,18 @@ class TestMigrationAndService(unittest.TestCase):
             root = Path(tmp)
             (root / ".env").write_text("ANTHROPIC_API_KEY=sk-ant-test\n", encoding="utf-8")
             (root / "openclaw.json").write_text(
-                json.dumps({"channels": {"telegram": {"botToken": "123:telegram"}}}),
+                json.dumps(
+                    {
+                        "channels": {"telegram": {"botToken": "123:telegram"}},
+                        "gateway": {"auth": {"token": "shared-token"}},
+                    }
+                ),
                 encoding="utf-8",
             )
             report = MigrationImporter().preview("openclaw", str(root))
             self.assertIn("ANTHROPIC_API_KEY", report.secrets_found)
             self.assertIn("TELEGRAM_BOT_TOKEN", report.secrets_found)
+            self.assertIn("HELLOAGI_API_KEY", report.secrets_found)
 
     def test_service_manager_install_records_state(self):
         with TemporaryDirectory() as tmp:

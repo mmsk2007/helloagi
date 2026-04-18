@@ -26,6 +26,7 @@ from agi_runtime.governance.srg import SRGGovernor, GovernanceResult
 from agi_runtime.latency.ale import ALEngine
 from agi_runtime.memory.identity import IdentityEngine
 from agi_runtime.memory.principals import PrincipalProfileStore
+from agi_runtime.config.providers import resolve_provider_credential
 from agi_runtime.config.settings import RuntimeSettings
 from agi_runtime.tools.registry import (
     ToolRegistry,
@@ -158,25 +159,27 @@ class HelloAGIAgent:
         self._session_tool_calls_by_principal[self.current_principal()] = value
 
     def _configure_llm_backbone(self) -> None:
-        """Pick Anthropic vs Google from HELLOAGI_LLM_PROVIDER / settings.llm_provider and available keys."""
+        """Pick Anthropic vs Google from settings/env and available credentials."""
         env_override = os.environ.get("HELLOAGI_LLM_PROVIDER")
         pref = (env_override or getattr(self.settings, "llm_provider", None) or "auto")
         pref = str(pref).strip().lower()
         if pref not in ("auto", "anthropic", "google"):
             pref = "auto"
 
-        has_anthropic = _ANTHROPIC_AVAILABLE and bool(os.environ.get("ANTHROPIC_API_KEY"))
-        has_google_key = bool(os.environ.get("GOOGLE_API_KEY"))
+        anthropic_credential = resolve_provider_credential("anthropic")
+        google_credential = resolve_provider_credential("google")
+        has_anthropic = _ANTHROPIC_AVAILABLE and anthropic_credential.configured
+        has_google_key = google_credential.configured
         has_genai = False
         if has_google_key:
             import importlib.util
             has_genai = importlib.util.find_spec("google.genai") is not None
 
         if has_anthropic:
-            self._claude = _anthropic_lib.Anthropic()
+            self._claude = _anthropic_lib.Anthropic(api_key=anthropic_credential.secret)
         if has_google_key and has_genai:
             from google import genai
-            self._gemini_client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+            self._gemini_client = genai.Client(api_key=google_credential.secret)
 
         if pref == "anthropic":
             self._llm_provider = "anthropic" if has_anthropic else None
@@ -999,7 +1002,8 @@ class HelloAGIAgent:
                 if tc.name == "delegate_task":
                     msg = (
                         "delegate_task is only supported with the Anthropic backbone. "
-                        "Set ANTHROPIC_API_KEY and HELLOAGI_LLM_PROVIDER=anthropic, or complete the task without delegating."
+                        "Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN and HELLOAGI_LLM_PROVIDER=anthropic, "
+                        "or complete the task without delegating."
                     )
                     tool_results.append({
                         "type": "tool_result",
@@ -1146,15 +1150,16 @@ class HelloAGIAgent:
         """Fallback when no LLM backbone is active (keys + optional google-genai)."""
         allowed_tools = self._list_allowed_tools()
         tools_list = ", ".join(t.name for t in allowed_tools)
-        has_google = bool(os.environ.get("GOOGLE_API_KEY"))
+        anthropic_ready = resolve_provider_credential("anthropic").configured
+        google_ready = resolve_provider_credential("google").configured
         text = (
             f"[{self.identity.state.name} | {self.identity.state.character}]\n"
             f"I received your request but no LLM backbone is active.\n"
-            f"- Set ANTHROPIC_API_KEY for Claude (default when present), or\n"
-            f"- Set GOOGLE_API_KEY and run `pip install google-genai` to use Gemini "
+            f"- Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN for Claude (default when present), or\n"
+            f"- Set GOOGLE_API_KEY or GOOGLE_AUTH_TOKEN and run `pip install google-genai` to use Gemini "
             f"(use HELLOAGI_LLM_PROVIDER=google when both keys exist).\n\n"
-            f"Current: GOOGLE_API_KEY={'set' if has_google else 'unset'}, "
-            f"ANTHROPIC_API_KEY={'set' if os.environ.get('ANTHROPIC_API_KEY') else 'unset'}.\n\n"
+            f"Current: GOOGLE={'set' if google_ready else 'unset'}, "
+            f"ANTHROPIC={'set' if anthropic_ready else 'unset'}.\n\n"
             f"Without an LLM, tool execution is still available.\n"
             f"Available tools ({len(allowed_tools)}): {tools_list}\n"
         )

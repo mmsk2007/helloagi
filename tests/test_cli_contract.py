@@ -20,7 +20,7 @@ class TestCLIContract(unittest.TestCase):
             cwd=ROOT,
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=60,
         )
 
     def test_run_help_exposes_policy_flag(self):

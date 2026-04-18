@@ -30,10 +30,14 @@ class ImportReport:
 class MigrationImporter:
     ENV_KEYS = [
         "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
         "OPENAI_API_KEY",
+        "OPENAI_AUTH_TOKEN",
         "GOOGLE_API_KEY",
+        "GOOGLE_AUTH_TOKEN",
         "TELEGRAM_BOT_TOKEN",
         "DISCORD_BOT_TOKEN",
+        "HELLOAGI_API_KEY",
     ]
 
     DEFAULT_PATHS = {
@@ -188,26 +192,38 @@ class MigrationImporter:
             config: dict[str, Any] = {}
 
             anthropic = self._deep_get(data, ["models", "providers", "anthropic", "apiKey"])
+            anthropic_token = self._deep_get(data, ["models", "providers", "anthropic", "token"])
             openai = self._deep_get(data, ["models", "providers", "openai", "apiKey"])
+            openai_token = self._deep_get(data, ["models", "providers", "openai", "token"])
             google = self._deep_get(data, ["models", "providers", "google", "apiKey"])
+            google_token = self._deep_get(data, ["models", "providers", "google", "token"])
             telegram = self._deep_get(data, ["channels", "telegram", "botToken"])
             discord = self._deep_get(data, ["channels", "discord", "token"])
+            gateway_token = self._deep_get(data, ["gateway", "auth", "token"])
             workspace = self._deep_get(data, ["workspace", "path"])
             dm_policy = self._deep_get(data, ["channels", "telegram", "dmPolicy"])
             allow_from = self._deep_get(data, ["channels", "telegram", "allowFrom"])
 
             if isinstance(anthropic, str) and anthropic:
                 secrets["ANTHROPIC_API_KEY"] = anthropic
+            if isinstance(anthropic_token, str) and anthropic_token:
+                secrets["ANTHROPIC_AUTH_TOKEN"] = anthropic_token
             if isinstance(openai, str) and openai:
                 secrets["OPENAI_API_KEY"] = openai
+            if isinstance(openai_token, str) and openai_token:
+                secrets["OPENAI_AUTH_TOKEN"] = openai_token
             if isinstance(google, str) and google:
                 secrets["GOOGLE_API_KEY"] = google
+            if isinstance(google_token, str) and google_token:
+                secrets["GOOGLE_AUTH_TOKEN"] = google_token
             if isinstance(telegram, str) and telegram:
                 secrets["TELEGRAM_BOT_TOKEN"] = telegram
                 channels["telegram"] = {"configured": True}
             if isinstance(discord, str) and discord:
                 secrets["DISCORD_BOT_TOKEN"] = discord
                 channels["discord"] = {"configured": True}
+            if isinstance(gateway_token, str) and gateway_token:
+                secrets["HELLOAGI_API_KEY"] = gateway_token
             if isinstance(workspace, str) and workspace:
                 config["workspace_path"] = workspace
             if dm_policy is not None:
@@ -297,14 +313,23 @@ class MigrationImporter:
         channels = data.setdefault("channels", {})
         if found.get("ANTHROPIC_API_KEY"):
             providers["anthropic_api_key"] = True
+        if found.get("ANTHROPIC_AUTH_TOKEN"):
+            providers["anthropic_auth_token"] = True
         if found.get("OPENAI_API_KEY"):
             providers["openai_api_key"] = True
+        if found.get("OPENAI_AUTH_TOKEN"):
+            providers["openai_auth_token"] = True
         if found.get("GOOGLE_API_KEY"):
             providers["google_api_key"] = True
+        if found.get("GOOGLE_AUTH_TOKEN"):
+            providers["google_auth_token"] = True
         if found.get("TELEGRAM_BOT_TOKEN"):
             channels["telegram_bot_token"] = True
         if found.get("DISCORD_BOT_TOKEN"):
             channels["discord_bot_token"] = True
+        service = data.setdefault("service", {})
+        if found.get("HELLOAGI_API_KEY"):
+            service["auth_token"] = True
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
     def _resolve_destination(self, path: Path, *, overwrite: bool, rename_imports: bool) -> Path | None:

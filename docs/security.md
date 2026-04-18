@@ -6,7 +6,7 @@ HelloAGI is local-first by default.
 
 - SRG evaluates every tool call before execution.
 - The HTTP API binds to `127.0.0.1` by default.
-- API access is protected by `HELLOAGI_API_KEY` when the service layer provisions it.
+- API access is protected by `HELLOAGI_API_KEY`, and onboarding can generate that shared auth token during setup.
 - Secrets are loaded from process environment first, then local `.env`.
 - `helloagi.onboard.json` stores non-secret onboarding state only.
 
