@@ -33,15 +33,27 @@ class IdentityEngine:
 
     def _load(self) -> IdentityState:
         if not self.path.exists():
-            seed = CharacterSeed(mission=self.mission, style=self.style, domain_focus=self.domain_focus)
-            g = build_initial_character(seed)
-            s = IdentityState(character=g["archetype"], purpose=g["mission"], principles=g["principles"])
-            self._save(s)
-            return s
-        return IdentityState(**json.loads(self.path.read_text()))
+            return self._build_and_save_default()
+        try:
+            raw = self.path.read_text(encoding="utf-8").strip()
+            if not raw:
+                return self._build_and_save_default()
+            data = json.loads(raw)
+            if not isinstance(data, dict):
+                return self._build_and_save_default()
+            return IdentityState(**data)
+        except Exception:
+            return self._build_and_save_default()
+
+    def _build_and_save_default(self) -> IdentityState:
+        seed = CharacterSeed(mission=self.mission, style=self.style, domain_focus=self.domain_focus)
+        g = build_initial_character(seed)
+        s = IdentityState(character=g["archetype"], purpose=g["mission"], principles=g["principles"])
+        self._save(s)
+        return s
 
     def _save(self, s: IdentityState):
-        self.path.write_text(json.dumps(asdict(s), indent=2))
+        self.path.write_text(json.dumps(asdict(s), indent=2), encoding="utf-8")
 
     def evolve(self, observation: str):
         t = observation.lower()

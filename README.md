@@ -209,6 +209,13 @@ cd helloagi
    Multi-user memory/history is scoped per principal; set `HELLOAGI_MEMORY_SCOPE=strict` to
    disable legacy unscoped memory fallback.
 
+   Reminder commands:
+   - `/remind in 30m | check deployment`
+   - `/remind tomorrow 9am | standup prep`
+   - `/remind cron:0 9 * * * | daily planning`
+   - `/reminders`
+   - `/reminder_cancel <id>` / `/reminder_pause <id>` / `/reminder_resume <id>` / `/reminder_run_now <id>`
+
 **Optional background process:** after `helloagi service install --telegram`, run `helloagi service start` (uses the same `serve --telegram` under the hood; working directory should be the project folder with `.env`).
 
 ---
@@ -464,6 +471,12 @@ helloagi serve --discord
 ```
 
 Full agent capabilities on every channel — same SRG governance, same tools, same personality.
+
+Telegram reminder scheduler settings:
+- `HELLOAGI_REMINDER_TICK_SECONDS` (default `5`)
+- `HELLOAGI_REMINDER_STUCK_SECONDS` (default `600`)
+- `HELLOAGI_REMINDER_ONESHOT_GRACE_SECONDS` (default `300`)
+- `HELLOAGI_REMINDER_TIMEZONE` (default `UTC`)
 
 ---
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -23,10 +24,11 @@ class ReminderService:
     def __init__(self, store: ReminderStore | None = None):
         self.store = store or ReminderStore()
 
-    def create(self, *, principal_id: str, message: str, schedule: str, timezone: str = "UTC") -> ReminderCreateResult:
+    def create(self, *, principal_id: str, message: str, schedule: str, timezone: str = "") -> ReminderCreateResult:
         message = (message or "").strip()
         if not message:
             return ReminderCreateResult(ok=False, message="Reminder message is required.")
+        timezone = (timezone or os.environ.get("HELLOAGI_REMINDER_TIMEZONE", "UTC")).strip() or "UTC"
 
         chat_id, user_id = principal_to_telegram(principal_id)
         if not chat_id:
