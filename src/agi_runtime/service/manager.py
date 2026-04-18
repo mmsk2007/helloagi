@@ -15,7 +15,7 @@ from typing import Any
 
 import requests
 
-from agi_runtime.config.env import save_env_values
+from agi_runtime.config.env import resolve_env_value, save_env_values
 
 
 @dataclass
@@ -34,6 +34,8 @@ class ServiceConfig:
     manifest_path: str = ""
     native_registered: bool = False
     last_error: str = ""
+    auth_required: bool = False
+    auth_env_key: str = "HELLOAGI_API_KEY"
     pid: int | None = None
     started_at: float | None = None
 
@@ -76,6 +78,8 @@ class ServiceManager:
         discord: bool,
         enabled_extensions: list[str] | None = None,
         workdir: str | None = None,
+        require_auth: bool = True,
+        auth_env_key: str = "HELLOAGI_API_KEY",
     ) -> ServiceConfig:
         cfg = self.load()
         cfg.installed = True
@@ -95,8 +99,10 @@ class ServiceManager:
         cfg.backend = self._detect_backend()
         cfg.service_name = self._service_name()
         cfg.manifest_path = str(self._manifest_path(cfg))
+        cfg.auth_required = require_auth
+        cfg.auth_env_key = auth_env_key
         cfg.last_error = ""
-        self._ensure_service_token()
+        self._ensure_service_token(cfg.auth_env_key) if cfg.auth_required else None
         self._write_manifest(cfg)
         cfg.native_registered = self._register_native_service(cfg)
         self.save(cfg)
@@ -106,6 +112,8 @@ class ServiceManager:
         cfg = self.load()
         if not cfg.installed:
             raise RuntimeError("Service is not installed. Run `helloagi service install` first.")
+        if cfg.auth_required and not resolve_env_value(cfg.auth_env_key):
+            raise RuntimeError(f"Missing required service auth token in {cfg.auth_env_key}.")
         if self._is_running(cfg):
             return cfg
 
@@ -178,6 +186,9 @@ class ServiceManager:
             "enabled_extensions": cfg.enabled_extensions,
             "telegram": cfg.telegram,
             "discord": cfg.discord,
+            "auth_required": cfg.auth_required,
+            "auth_env_key": cfg.auth_env_key,
+            "auth_configured": bool(resolve_env_value(cfg.auth_env_key)),
             "started_at": cfg.started_at,
             "last_error": cfg.last_error,
             "health": health,
@@ -185,7 +196,7 @@ class ServiceManager:
 
     def health(self, timeout_s: float = 3.0) -> dict[str, Any]:
         cfg = self.load()
-        token = os.environ.get("HELLOAGI_API_KEY", "")
+        token = resolve_env_value(cfg.auth_env_key or "HELLOAGI_API_KEY")
         headers = {"Authorization": f"Bearer {token}"} if token else {}
         try:
             response = requests.get(f"http://{cfg.host}:{cfg.port}/health", headers=headers, timeout=timeout_s)
@@ -230,6 +241,8 @@ class ServiceManager:
         ]
         for name in cfg.enabled_extensions:
             command.extend(["--extension", name])
+        if cfg.auth_required:
+            command.append("--require-auth")
         return command
 
     def _manifest_path(self, cfg: ServiceConfig) -> Path:
@@ -413,12 +426,12 @@ class ServiceManager:
         except Exception:
             return False
 
-    def _ensure_service_token(self):
-        if os.environ.get("HELLOAGI_API_KEY"):
+    def _ensure_service_token(self, env_key: str = "HELLOAGI_API_KEY"):
+        if resolve_env_value(env_key):
             return
         token = secrets.token_urlsafe(24)
-        save_env_values({"HELLOAGI_API_KEY": token})
-        os.environ["HELLOAGI_API_KEY"] = token
+        save_env_values({env_key: token})
+        os.environ[env_key] = token
 
     @staticmethod
     def _pid_alive(pid: int) -> bool:

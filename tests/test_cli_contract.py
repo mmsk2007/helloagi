@@ -38,6 +38,7 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("migrate", result.stdout)
         self.assertIn("extensions", result.stdout)
         self.assertIn("runs", result.stdout)
+        self.assertIn("auth", result.stdout)
 
     def test_tools_command_does_not_crash_on_windows_encoding(self):
         result = self.run_cli("tools", "--policy", "reviewer")
@@ -79,6 +80,27 @@ class TestCLIContract(unittest.TestCase):
         result = self.run_cli("extensions", "list")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("extensions", result.stdout.lower())
+
+    def test_onboard_help_exposes_non_interactive_flags(self):
+        result = self.run_cli("onboard", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--non-interactive", result.stdout)
+        self.assertIn("--enable-extension", result.stdout)
+
+    def test_runs_help_exposes_export_subcommand(self):
+        result = self.run_cli("runs", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("export", result.stdout)
+
+    def test_auth_list_command_is_exposed(self):
+        result = self.run_cli("auth", "list")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("profiles", result.stdout)
+
+    def test_serve_help_exposes_require_auth(self):
+        result = self.run_cli("serve", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--require-auth", result.stdout)
 
 
 if __name__ == "__main__":

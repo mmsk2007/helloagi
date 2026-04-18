@@ -7,6 +7,7 @@ import os
 import shutil
 from typing import Any
 
+from agi_runtime.auth.profiles import AuthProfileManager
 from agi_runtime.config.env import save_env_values
 
 
@@ -105,6 +106,7 @@ class MigrationImporter:
                 os.environ.setdefault(key, value)
 
         self._update_onboarding_state(found)
+        self._update_auth_profiles(found)
 
         source_import_root = self.import_root / source
         artifacts: list[str] = []
@@ -330,7 +332,41 @@ class MigrationImporter:
         service = data.setdefault("service", {})
         if found.get("HELLOAGI_API_KEY"):
             service["auth_token"] = True
+        if not providers.get("active_provider") or providers.get("active_provider") == "template":
+            if found.get("ANTHROPIC_AUTH_TOKEN"):
+                providers["active_provider"] = "anthropic"
+                providers["active_auth_mode"] = "auth_token"
+                providers["active_profile"] = "anthropic-default"
+            elif found.get("ANTHROPIC_API_KEY"):
+                providers["active_provider"] = "anthropic"
+                providers["active_auth_mode"] = "api_key"
+                providers["active_profile"] = "anthropic-default"
+            elif found.get("GOOGLE_AUTH_TOKEN"):
+                providers["active_provider"] = "google"
+                providers["active_auth_mode"] = "auth_token"
+                providers["active_profile"] = "google-default"
+            elif found.get("GOOGLE_API_KEY"):
+                providers["active_provider"] = "google"
+                providers["active_auth_mode"] = "api_key"
+                providers["active_profile"] = "google-default"
         path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def _update_auth_profiles(self, found: dict[str, str]):
+        manager = AuthProfileManager()
+        if found.get("ANTHROPIC_AUTH_TOKEN"):
+            manager.ensure_default_profile("anthropic", "auth_token", "ANTHROPIC_AUTH_TOKEN", "Imported Anthropic profile")
+        elif found.get("ANTHROPIC_API_KEY"):
+            manager.ensure_default_profile("anthropic", "api_key", "ANTHROPIC_API_KEY", "Imported Anthropic profile")
+
+        if found.get("GOOGLE_AUTH_TOKEN"):
+            manager.ensure_default_profile("google", "auth_token", "GOOGLE_AUTH_TOKEN", "Imported Google profile")
+        elif found.get("GOOGLE_API_KEY"):
+            manager.ensure_default_profile("google", "api_key", "GOOGLE_API_KEY", "Imported Google profile")
+
+        if found.get("OPENAI_AUTH_TOKEN"):
+            manager.ensure_default_profile("openai", "auth_token", "OPENAI_AUTH_TOKEN", "Imported OpenAI profile")
+        elif found.get("OPENAI_API_KEY"):
+            manager.ensure_default_profile("openai", "api_key", "OPENAI_API_KEY", "Imported OpenAI profile")
 
     def _resolve_destination(self, path: Path, *, overwrite: bool, rename_imports: bool) -> Path | None:
         if overwrite or not path.exists():

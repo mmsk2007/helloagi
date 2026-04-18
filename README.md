@@ -220,7 +220,13 @@ cd helloagi
    helloagi onboard
    ```
 
-   The wizard can import an existing OpenClaw/Hermes setup, choose the active provider (`template`, `anthropic`, or `google`), accept `api_key` or `auth_token` auth modes, generate `HELLOAGI_API_KEY` for the local service, and enable Telegram/Discord in the same flow.
+   The wizard can import an existing OpenClaw/Hermes setup, choose the active provider (`template`, `anthropic`, or `google`), accept `api_key` or `auth_token` auth modes, create the active auth profile, generate `HELLOAGI_API_KEY` for the local service, and enable Telegram/Discord in the same flow.
+
+   For scripted installs, the same setup can run without prompts:
+
+   ```bash
+   helloagi onboard --non-interactive --provider anthropic --auth-mode auth_token --runtime-mode service --enable-extension telegram
+   ```
 
    Paste the Telegram token when asked (or add `TELEGRAM_BOT_TOKEN=...` to `.env` later). For model-backed replies, choose Anthropic or Google during onboarding and provide either the API key or auth token for that provider.
 
@@ -256,8 +262,11 @@ cd helloagi
 - Supported provider secret forms: `*_API_KEY` and `*_AUTH_TOKEN`.
 - `HELLOAGI_API_KEY` is the shared auth token for the local API, dashboard, and service-aware clients.
 - `helloagi.onboard.json` stores onboarding metadata only, not provider or channel secrets.
+- `helloagi auth list|show|activate|deactivate|doctor` manages provider auth profiles and runtime precedence.
 - Channels are optional extensions. Use `helloagi extensions doctor` to check readiness.
 - `helloagi serve` and `helloagi service install` honor persistently enabled channel extensions.
+- `helloagi serve --require-auth` enforces `HELLOAGI_API_KEY` even outside service mode.
+- `helloagi runs export <id>` produces a redacted workflow summary for operator review.
 - Migration imports secrets into `.env`, copies source artifacts into `memory/imports/`, and copies imported skills into `memory/skills/`.
 
 ---
@@ -619,7 +628,7 @@ Your tool is automatically discovered, registered, gets SRG governance, and appe
 ```bash
 pip install helloagi[dev]
 PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py"
-# 131 tests, 0 failures
+# 144 tests, 0 failures
 ```
 
 ---

@@ -19,6 +19,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
+from agi_runtime.config.env import resolve_env_value
 from agi_runtime.core.agent import HelloAGIAgent
 from agi_runtime.config.settings import RuntimeSettings, load_settings
 
@@ -28,6 +29,8 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
 
     agent: HelloAGIAgent = None
     api_key: str = None
+    auth_required: bool = False
+    auth_env_key: str = "HELLOAGI_API_KEY"
     _stats = {"requests": 0, "started_at": time.time()}
 
     def log_message(self, format, *args):
@@ -120,6 +123,9 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
             "skills": len(self.agent.skills.list_skills()),
             "llm_configured": self.agent._claude is not None,
             "srg_active": True,
+            "auth_required": self.auth_required,
+            "auth_mode": "token" if self.auth_required else "none",
+            "auth_env_key": self.auth_env_key,
             "uptime_seconds": round(uptime),
             "total_requests": self._stats["requests"],
         })
@@ -286,13 +292,24 @@ class ThreadedHTTPServer(HTTPServer):
             self.shutdown_request(request)
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8787, config_path: str = "helloagi.json", policy_pack: str = "safe-default"):
+def run_server(
+    host: str = "127.0.0.1",
+    port: int = 8787,
+    config_path: str = "helloagi.json",
+    policy_pack: str = "safe-default",
+    require_auth: bool = False,
+):
     """Start the HelloAGI API server."""
     settings = load_settings(config_path)
     agent = HelloAGIAgent(settings, policy_pack=policy_pack)
+    api_key = resolve_env_value("HELLOAGI_API_KEY")
+    if require_auth and not api_key:
+        raise RuntimeError("HELLOAGI_API_KEY is required when --require-auth is enabled.")
 
     HelloAGIHandler.agent = agent
-    HelloAGIHandler.api_key = os.environ.get("HELLOAGI_API_KEY")
+    HelloAGIHandler.api_key = api_key if (require_auth or api_key) else None
+    HelloAGIHandler.auth_required = bool(require_auth or api_key)
+    HelloAGIHandler.auth_env_key = "HELLOAGI_API_KEY"
 
     srv = ThreadedHTTPServer((host, port), HelloAGIHandler)
 
@@ -304,7 +321,7 @@ def run_server(host: str = "127.0.0.1", port: int = 8787, config_path: str = "he
     print(f"   Agent: {agent.identity.state.name} ({agent.identity.state.character})")
     print(f"   Tools: {tools_count} | Skills: {skills_count} | LLM: {llm_status} | SRG: active")
     print(f"   Listening: http://{host}:{port}")
-    print(f"   Auth: {'API key required' if HelloAGIHandler.api_key else 'open (set HELLOAGI_API_KEY to secure)'}")
+    print(f"   Auth: {'API key required' if HelloAGIHandler.auth_required else 'open (set HELLOAGI_API_KEY or use --require-auth to secure)'}")
     print()
     print(f"   Endpoints:")
     print(f"     GET  /health       — Service health")

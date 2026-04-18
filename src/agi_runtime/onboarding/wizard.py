@@ -18,6 +18,7 @@ import platform
 import shutil
 import sys
 
+from agi_runtime.auth.profiles import AuthProfileManager
 from agi_runtime.config.env import load_local_env, save_env_values
 from agi_runtime.config.providers import provider_env_snapshot, resolve_provider_credential
 from agi_runtime.config.settings import RuntimeSettings, load_settings, save_settings
@@ -60,6 +61,7 @@ PROVIDER_PROMPTS: dict[str, dict[str, str]] = {
 class ProviderKeys:
     active_provider: str = "template"
     active_auth_mode: str = "none"
+    active_profile: str = ""
     openai_api_key: bool = False
     openai_auth_token: bool = False
     anthropic_api_key: bool = False
@@ -101,6 +103,21 @@ class OnboardConfig:
     migration_source: str = ""
     env_detected: dict = field(default_factory=dict)
     setup_complete: bool = False
+
+
+@dataclass
+class WizardOptions:
+    non_interactive: bool = False
+    runtime_mode: str | None = None
+    provider: str | None = None
+    auth_mode: str | None = None
+    service_auth_token: str | None = None
+    enable_extensions: list[str] = field(default_factory=list)
+    import_source: str | None = None
+    agent_name: str | None = None
+    owner_name: str | None = None
+    focus: str | None = None
+    model_tier: str | None = None
 
 
 def _to_dict(cfg: OnboardConfig) -> dict:
@@ -287,35 +304,102 @@ def _provider_prompt_name(provider: str, auth_mode: str) -> str:
     return PROVIDER_PROMPTS[provider][auth_mode]
 
 
-def _configure_primary_provider(provider: str, env: dict) -> tuple[str, str, dict[str, str]]:
+def _normalize_runtime_mode(value: str | None, default: str = "hybrid") -> str:
+    if value in {"cli", "hybrid", "service"}:
+        return value
+    return default
+
+
+def _normalize_focus(value: str | None, default: str = "general") -> str:
+    if value in {"general", "coding", "research", "creative"}:
+        return value
+    return default
+
+
+def _normalize_model_tier(value: str | None, default: str = "balanced") -> str:
+    if value in {"speed", "balanced", "quality"}:
+        return value
+    return default
+
+
+def _normalize_provider(value: str | None, default: str = "template") -> str:
+    if value in {"template", "anthropic", "google"}:
+        return value
+    return default
+
+
+def _normalize_auth_mode(value: str | None, default: str = "api_key") -> str:
+    if value in {"api_key", "auth_token"}:
+        return value
+    return default
+
+
+def _default_profile_name(provider: str) -> str:
+    return f"{provider}-default"
+
+
+def _apply_import_source(choice: str) -> tuple[str, dict]:
+    choice = (choice or "").strip().lower()
+    if choice not in {"openclaw", "hermes"}:
+        return "", _detect_environment()
+
+    importer = MigrationImporter()
+    report = importer.preview(choice)
+    if report.notes:
+        for note in report.notes:
+            _info(note)
+    applied = importer.apply(choice, rename_imports=True)
+    if applied.applied:
+        _ok(f"Imported {choice} config and local artifacts into HelloAGI state.")
+        return choice, _detect_environment()
+
+    _warn(f"No importable state found in {applied.source_path}.")
+    return "", _detect_environment()
+
+
+def _configure_primary_provider(
+    provider: str,
+    env: dict,
+    *,
+    auth_mode: str | None = None,
+    non_interactive: bool = False,
+) -> tuple[str, str, dict[str, str]]:
     if provider == "template":
         return "template", "none", {}
 
-    default_mode = _provider_auth_default(provider, env)
-    print()
-    print(f"    {CYAN}1.{NC} API key")
-    print(f"    {CYAN}2.{NC} Auth token")
-    auth_choice = _prompt("Auth method (1-2)", "1" if default_mode == "api_key" else "2")
-    auth_mode = "auth_token" if auth_choice == "2" else "api_key"
-    env_name = _provider_prompt_name(provider, auth_mode)
+    chosen_auth_mode = _normalize_auth_mode(auth_mode, _provider_auth_default(provider, env))
+    if not non_interactive:
+        print()
+        print(f"    {CYAN}1.{NC} API key")
+        print(f"    {CYAN}2.{NC} Auth token")
+        auth_choice = _prompt("Auth method (1-2)", "1" if chosen_auth_mode == "api_key" else "2")
+        chosen_auth_mode = "auth_token" if auth_choice == "2" else "api_key"
+    env_name = _provider_prompt_name(provider, chosen_auth_mode)
     existing = os.environ.get(env_name, "")
     if existing:
         _ok(f"{env_name} already present in environment")
-        return provider, auth_mode, {}
+        return provider, chosen_auth_mode, {}
+
+    if non_interactive:
+        _warn(f"{env_name} is not configured. HelloAGI will stay in template mode until you add one.")
+        return "template", "none", {}
 
     secret = _secret_prompt(f"{env_name}")
     if not secret:
         _warn(f"No {provider} credential entered. HelloAGI will stay in template mode until you add one.")
         return "template", "none", {}
-    return provider, auth_mode, {env_name: secret}
+    return provider, chosen_auth_mode, {env_name: secret}
 
 
-def _configure_optional_openai(env: dict) -> tuple[str, dict[str, str]]:
+def _configure_optional_openai(env: dict, *, non_interactive: bool = False) -> tuple[str, dict[str, str]]:
     current = resolve_provider_credential("openai")
     if current.configured:
         _ok(f"Optional OpenAI credential detected via {current.env_name}")
-        if not _yes_no_prompt("Replace the stored OpenAI credential", False):
+        if non_interactive or not _yes_no_prompt("Replace the stored OpenAI credential", False):
             return current.auth_mode, {}
+
+    if non_interactive:
+        return current.auth_mode if current.configured else "none", {}
 
     if not _yes_no_prompt("Store an optional OpenAI credential for future adapters/tools", False):
         return current.auth_mode if current.configured else "none", {}
@@ -330,6 +414,34 @@ def _configure_optional_openai(env: dict) -> tuple[str, dict[str, str]]:
     if not secret:
         return "none", {}
     return auth_mode, {env_name: secret}
+
+
+def _sync_auth_profiles(primary_provider: str, primary_auth_mode: str, openai_auth_mode: str) -> str:
+    manager = AuthProfileManager()
+    active_profile = ""
+
+    if primary_provider in PROVIDER_PROMPTS and primary_auth_mode in {"api_key", "auth_token"}:
+        env_name = _provider_prompt_name(primary_provider, primary_auth_mode)
+        if os.environ.get(env_name):
+            profile = manager.ensure_default_profile(
+                primary_provider,
+                primary_auth_mode,
+                env_name,
+                description=f"Active {primary_provider} runtime profile",
+            )
+            active_profile = profile.name
+
+    if openai_auth_mode in {"api_key", "auth_token"}:
+        env_name = _provider_prompt_name("openai", openai_auth_mode)
+        if os.environ.get(env_name):
+            manager.ensure_default_profile(
+                "openai",
+                openai_auth_mode,
+                env_name,
+                description="Optional OpenAI profile for adapters and tools",
+            )
+
+    return active_profile
 
 
 def _run_self_test(provider: str, provider_secret: str = "") -> dict:
@@ -403,7 +515,8 @@ def _run_self_test(provider: str, provider_secret: str = "") -> dict:
     return results
 
 
-def run_wizard(path: str = "helloagi.onboard.json"):
+def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | None = None):
+    options = options or WizardOptions()
     _banner()
     from agi_runtime.onboarding.quotes import get_onboarding_quotes
 
@@ -438,7 +551,12 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     else:
         _warn("Discord library missing. Run: pip install 'helloagi[discord]'")
 
-    migration_source, env = _maybe_import_existing_setup(env)
+    if options.import_source:
+        migration_source, env = _apply_import_source(options.import_source)
+    elif options.non_interactive:
+        migration_source = ""
+    else:
+        migration_source, env = _maybe_import_existing_setup(env)
     print()
 
     _step(2, total_steps, "Agent Identity")
@@ -446,29 +564,36 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     print(f"    {DIM}Give your agent a name and define who it serves.{NC}")
     print()
     settings = load_settings("helloagi.json")
-    agent_name = _prompt("Agent name", settings.identity_name or "Lana")
-    owner_name = _prompt("What should the agent call you", "")
+    agent_name = (options.agent_name or "").strip() or settings.identity_name or "Lana"
+    owner_name = (options.owner_name or "").strip()
+    if not options.non_interactive:
+        agent_name = _prompt("Agent name", agent_name)
+        owner_name = _prompt("What should the agent call you", owner_name)
     print()
 
     _step(3, total_steps, "Runtime Profile")
     print(f"    {DIM}{MAGENTA}\"{step_quotes[1]}\"{NC}")
     print(f"    {DIM}Choose how HelloAGI should behave by default.{NC}")
     print()
-    print(f"    {CYAN}1.{NC} General assistant")
-    print(f"    {CYAN}2.{NC} Coding and development")
-    print(f"    {CYAN}3.{NC} Research and analysis")
-    print(f"    {CYAN}4.{NC} Creative work")
-    focus_choice = _prompt("Focus (1-4)", "1")
     focus_map = {"1": "general", "2": "coding", "3": "research", "4": "creative"}
     pack_map = {"general": "safe-default", "coding": "coder", "research": "research", "creative": "creative"}
-    focus = focus_map.get(focus_choice, "general")
+    focus = _normalize_focus(options.focus, "general")
+    if not options.non_interactive:
+        print(f"    {CYAN}1.{NC} General assistant")
+        print(f"    {CYAN}2.{NC} Coding and development")
+        print(f"    {CYAN}3.{NC} Research and analysis")
+        print(f"    {CYAN}4.{NC} Creative work")
+        focus_choice = _prompt("Focus (1-4)", "1")
+        focus = focus_map.get(focus_choice, "general")
 
     print()
-    print(f"    {CYAN}1.{NC} CLI only")
-    print(f"    {CYAN}2.{NC} Hybrid local runtime {DIM}(CLI + service/channels){NC}")
-    print(f"    {CYAN}3.{NC} Service-first")
-    runtime_choice = _prompt("Runtime mode (1-3)", "2")
-    runtime_mode = {"1": "cli", "2": "hybrid", "3": "service"}.get(runtime_choice, "hybrid")
+    runtime_mode = _normalize_runtime_mode(options.runtime_mode, "hybrid")
+    if not options.non_interactive:
+        print(f"    {CYAN}1.{NC} CLI only")
+        print(f"    {CYAN}2.{NC} Hybrid local runtime {DIM}(CLI + service/channels){NC}")
+        print(f"    {CYAN}3.{NC} Service-first")
+        runtime_choice = _prompt("Runtime mode (1-3)", "2")
+        runtime_mode = {"1": "cli", "2": "hybrid", "3": "service"}.get(runtime_choice, "hybrid")
 
     print()
     print(f"    {DIM}Model routing tier:{NC}")
@@ -476,25 +601,34 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     print(f"    {CYAN}balanced{NC} default tradeoff")
     print(f"    {CYAN}quality{NC}  highest capability")
     default_tier = getattr(settings, "default_model_tier", "balanced")
-    model_tier = _prompt("Model tier", default_tier if default_tier in {"speed", "balanced", "quality"} else "balanced")
-    if model_tier not in {"speed", "balanced", "quality"}:
-        model_tier = "balanced"
-        _warn("Unknown tier, using balanced.")
+    model_tier = _normalize_model_tier(options.model_tier, default_tier if default_tier in {"speed", "balanced", "quality"} else "balanced")
+    if not options.non_interactive:
+        model_tier = _prompt("Model tier", model_tier)
+        if model_tier not in {"speed", "balanced", "quality"}:
+            model_tier = "balanced"
+            _warn("Unknown tier, using balanced.")
     print()
 
     _step(4, total_steps, "Primary Provider")
     print(f"    {DIM}HelloAGI runtime backbones today: template, Anthropic Claude, or Google Gemini.{NC}")
     print()
-    print(f"    {CYAN}1.{NC} Template mode {DIM}(no active model credential yet){NC}")
-    print(f"    {CYAN}2.{NC} Anthropic Claude")
-    print(f"    {CYAN}3.{NC} Google Gemini")
     provider_default = _provider_choice_default(env)
-    provider_choice = _prompt(
-        "Active provider (1-3)",
-        {"template": "1", "anthropic": "2", "google": "3"}[provider_default],
+    primary_provider = _normalize_provider(options.provider, provider_default)
+    if not options.non_interactive:
+        print(f"    {CYAN}1.{NC} Template mode {DIM}(no active model credential yet){NC}")
+        print(f"    {CYAN}2.{NC} Anthropic Claude")
+        print(f"    {CYAN}3.{NC} Google Gemini")
+        provider_choice = _prompt(
+            "Active provider (1-3)",
+            {"template": "1", "anthropic": "2", "google": "3"}[provider_default],
+        )
+        primary_provider = _provider_choice_label(provider_choice)
+    primary_provider, primary_auth_mode, primary_env_updates = _configure_primary_provider(
+        primary_provider,
+        env,
+        auth_mode=options.auth_mode,
+        non_interactive=options.non_interactive,
     )
-    primary_provider = _provider_choice_label(provider_choice)
-    primary_provider, primary_auth_mode, primary_env_updates = _configure_primary_provider(primary_provider, env)
     provider_secret = ""
     if primary_provider in {"anthropic", "google"}:
         if primary_env_updates:
@@ -505,7 +639,7 @@ def run_wizard(path: str = "helloagi.onboard.json"):
             provider_secret = resolve_provider_credential(primary_provider, preferred_mode=primary_auth_mode).secret
 
     print()
-    openai_auth_mode, openai_updates = _configure_optional_openai(env)
+    openai_auth_mode, openai_updates = _configure_optional_openai(env, non_interactive=options.non_interactive)
     if openai_updates:
         openai_env_name = next(iter(openai_updates))
         os.environ.setdefault(openai_env_name, openai_updates[openai_env_name])
@@ -515,17 +649,24 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     print(f"    {DIM}Enable channels now so first-run can already be chat-ready.{NC}")
     print()
     extension_manager = ExtensionManager()
-    telegram_enabled = _yes_no_prompt("Enable Telegram bot", env.get("has_telegram_token"))
+    requested_extensions = {name.strip().lower() for name in options.enable_extensions if name.strip()}
+    telegram_enabled = "telegram" in requested_extensions
+    if not options.non_interactive:
+        telegram_enabled = _yes_no_prompt("Enable Telegram bot", env.get("has_telegram_token"))
     telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-    if telegram_enabled and not telegram_token:
+    if telegram_enabled and not telegram_token and not options.non_interactive:
         telegram_token = _secret_prompt("TELEGRAM_BOT_TOKEN")
-    discord_enabled = _yes_no_prompt("Enable Discord bot", env.get("has_discord_token"))
+    discord_enabled = "discord" in requested_extensions
+    if not options.non_interactive:
+        discord_enabled = _yes_no_prompt("Enable Discord bot", env.get("has_discord_token"))
     discord_token = os.environ.get("DISCORD_BOT_TOKEN", "")
-    if discord_enabled and not discord_token:
+    if discord_enabled and not discord_token and not options.non_interactive:
         discord_token = _secret_prompt("DISCORD_BOT_TOKEN")
 
     google_ready = primary_provider == "google" and bool(provider_secret)
-    embeddings_enabled = _yes_no_prompt("Enable semantic memory extension", google_ready)
+    embeddings_enabled = "embeddings" in requested_extensions
+    if not options.non_interactive:
+        embeddings_enabled = _yes_no_prompt("Enable semantic memory extension", google_ready)
 
     if telegram_enabled:
         extension_manager.enable("telegram")
@@ -548,18 +689,21 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     service_manager = ServiceManager()
     backend = service_manager._detect_backend()
     _info(f"Detected service backend: {backend}")
-    service_token = os.environ.get("HELLOAGI_API_KEY", "")
+    service_token = (options.service_auth_token or "").strip() or os.environ.get("HELLOAGI_API_KEY", "")
     if service_token:
+        os.environ["HELLOAGI_API_KEY"] = service_token
         _ok("Reusing existing HELLOAGI_API_KEY")
     elif runtime_mode in {"hybrid", "service"} or telegram_enabled or discord_enabled:
-        if _yes_no_prompt("Generate a HelloAGI service auth token now", True):
+        should_generate = options.non_interactive or _yes_no_prompt("Generate a HelloAGI service auth token now", True)
+        if should_generate:
             service_token = os.urandom(24).hex()
             os.environ["HELLOAGI_API_KEY"] = service_token
             _ok("Generated local service auth token")
         else:
-            _warn("No service auth token generated. Local API will stay open until you add HELLOAGI_API_KEY.")
+            _warn("No service auth token generated. Service mode will stay unavailable until you add HELLOAGI_API_KEY.")
     else:
-        if _yes_no_prompt("Generate a local service auth token anyway", False):
+        should_generate = False if options.non_interactive else _yes_no_prompt("Generate a local service auth token anyway", False)
+        if should_generate:
             service_token = os.urandom(24).hex()
             os.environ["HELLOAGI_API_KEY"] = service_token
             _ok("Generated local service auth token")
@@ -567,7 +711,7 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     prepare_service = False
     service_install_state = None
     if runtime_mode != "cli" or telegram_enabled or discord_enabled:
-        prepare_service = _yes_no_prompt("Prepare background service now", runtime_mode != "cli")
+        prepare_service = options.non_interactive or _yes_no_prompt("Prepare background service now", runtime_mode != "cli")
         if prepare_service:
             try:
                 service_install_state = service_manager.install(
@@ -580,6 +724,8 @@ def run_wizard(path: str = "helloagi.onboard.json"):
                     enabled_extensions=enabled_extensions,
                     workdir=os.getcwd(),
                 )
+                if not service_token:
+                    service_token = os.environ.get("HELLOAGI_API_KEY", "")
                 _ok(f"Prepared HelloAGI service ({service_install_state.backend})")
             except Exception as exc:
                 _warn(f"Service preparation failed: {exc}")
@@ -616,6 +762,8 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     if service_token:
         env_updates["HELLOAGI_API_KEY"] = service_token
     save_env_values(env_updates)
+    load_local_env()
+    active_profile = _sync_auth_profiles(primary_provider, primary_auth_mode, openai_auth_mode)
 
     settings = load_settings("helloagi.json")
     settings.identity_name = agent_name
@@ -639,6 +787,7 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         providers=ProviderKeys(
             active_provider=primary_provider,
             active_auth_mode=primary_auth_mode,
+            active_profile=active_profile,
             openai_api_key=bool(os.environ.get("OPENAI_API_KEY")),
             openai_auth_token=bool(os.environ.get("OPENAI_AUTH_TOKEN")),
             anthropic_api_key=bool(os.environ.get("ANTHROPIC_API_KEY")),
@@ -677,6 +826,8 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     print(f"    Focus:        {CYAN}{focus}{NC} {DIM}(policy: {settings.default_policy_pack}){NC}")
     print(f"    Runtime:      {CYAN}{runtime_mode}{NC}")
     print(f"    Provider:     {CYAN}{primary_provider}{NC} {DIM}({primary_auth_mode}){NC}")
+    if active_profile:
+        print(f"    Auth profile: {CYAN}{active_profile}{NC}")
     print(f"    Model tier:   {CYAN}{model_tier}{NC}")
     print(f"    Service auth: {GREEN}configured{NC}" if service_token else f"    Service auth: {DIM}not configured{NC}")
     print(f"    Service:      {GREEN}prepared{NC}" if cfg.service.background_service else f"    Service:      {DIM}not prepared{NC}")
@@ -723,6 +874,8 @@ def status(path: str = "helloagi.onboard.json"):
     print(f"  Focus:        {data.get('focus', 'general')}")
     print(f"  Runtime:      {service.get('runtime_mode', 'hybrid')}")
     print(f"  Provider:     {providers.get('active_provider', 'template')} ({providers.get('active_auth_mode', 'none')})")
+    if providers.get("active_profile"):
+        print(f"  Auth profile: {providers.get('active_profile')}")
     ready_now = ", ".join(name for name, state in env_snapshot.items() if state.get("configured")) or "none"
     print(f"  Env ready:    {ready_now}")
     print(f"  Model tier:   {data.get('default_model_tier', 'balanced')}")

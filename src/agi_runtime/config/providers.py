@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import os
 
+from agi_runtime.auth.profiles import AuthProfileManager
+from agi_runtime.config.env import resolve_env_value
+
 
 PROVIDER_SECRET_ENV: dict[str, dict[str, list[str]]] = {
     "anthropic": {
@@ -28,6 +31,8 @@ class ProviderCredential:
     auth_mode: str = "none"
     env_name: str | None = None
     secret: str = ""
+    source: str = "none"
+    profile_name: str | None = None
 
     @property
     def configured(self) -> bool:
@@ -44,13 +49,20 @@ def env_names_for_provider(provider: str, auth_mode: str | None = None) -> list[
     return names
 
 
-def resolve_provider_credential(provider: str, preferred_mode: str | None = None) -> ProviderCredential:
+def resolve_provider_credential(
+    provider: str,
+    preferred_mode: str | None = None,
+    *,
+    env_path: str = ".env",
+    auth_profiles_path: str = "memory/auth_profiles.json",
+) -> ProviderCredential:
     provider_env = PROVIDER_SECRET_ENV.get(provider, {})
     mode_order = [preferred_mode] if preferred_mode in provider_env else []
     for candidate in ("api_key", "auth_token"):
         if candidate not in mode_order:
             mode_order.append(candidate)
 
+    # Highest precedence: canonical env names already present in the runtime.
     for mode in mode_order:
         for env_name in provider_env.get(mode, []):
             secret = os.environ.get(env_name, "").strip()
@@ -60,20 +72,48 @@ def resolve_provider_credential(provider: str, preferred_mode: str | None = None
                     auth_mode=mode,
                     env_name=env_name,
                     secret=secret,
+                    source="env",
+                )
+
+    # Next: enabled auth profiles, which may reference custom env keys.
+    profile_resolution = AuthProfileManager(path=auth_profiles_path, env_path=env_path).resolve(provider)
+    if profile_resolution.get("configured"):
+        return ProviderCredential(
+            provider=provider,
+            auth_mode=str(profile_resolution.get("auth_mode", "none")),
+            env_name=profile_resolution.get("env_name"),
+            secret=str(profile_resolution.get("secret", "")),
+            source=str(profile_resolution.get("source", "auth_profile")),
+            profile_name=profile_resolution.get("name"),
+        )
+
+    # Lowest precedence: canonical .env values without an active auth profile.
+    for mode in mode_order:
+        for env_name in provider_env.get(mode, []):
+            secret = resolve_env_value(env_name, env_path)
+            if secret:
+                return ProviderCredential(
+                    provider=provider,
+                    auth_mode=mode,
+                    env_name=env_name,
+                    secret=secret,
+                    source="local_env",
                 )
     return ProviderCredential(provider=provider)
 
 
-def provider_env_snapshot() -> dict[str, dict[str, object]]:
+def provider_env_snapshot(*, env_path: str = ".env", auth_profiles_path: str = "memory/auth_profiles.json") -> dict[str, dict[str, object]]:
     snapshot: dict[str, dict[str, object]] = {}
     for provider in PROVIDER_SECRET_ENV:
-        credential = resolve_provider_credential(provider)
+        credential = resolve_provider_credential(provider, env_path=env_path, auth_profiles_path=auth_profiles_path)
         provider_state = {
             "configured": credential.configured,
             "auth_mode": credential.auth_mode,
             "env_name": credential.env_name,
+            "source": credential.source,
+            "profile_name": credential.profile_name,
         }
         for mode in ("api_key", "auth_token"):
-            provider_state[mode] = any(os.environ.get(name) for name in env_names_for_provider(provider, mode))
+            provider_state[mode] = any(resolve_env_value(name, env_path) for name in env_names_for_provider(provider, mode))
         snapshot[provider] = provider_state
     return snapshot

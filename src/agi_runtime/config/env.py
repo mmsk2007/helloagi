@@ -4,8 +4,8 @@ from pathlib import Path
 import os
 
 
-def load_local_env(path: str = ".env") -> dict[str, str]:
-    """Load a local .env file into process env without overriding existing vars."""
+def read_env_file(path: str = ".env") -> dict[str, str]:
+    """Read a local .env file without mutating process environment."""
     p = Path(path)
     loaded: dict[str, str] = {}
     if not p.exists():
@@ -21,8 +21,23 @@ def load_local_env(path: str = ".env") -> dict[str, str]:
         if value.startswith(("'", '"')) and value.endswith(("'", '"')) and len(value) >= 2:
             value = value[1:-1]
         loaded[key] = value
+    return loaded
+
+
+def load_local_env(path: str = ".env") -> dict[str, str]:
+    """Load a local .env file into process env without overriding existing vars."""
+    loaded = read_env_file(path)
+    for key, value in loaded.items():
         os.environ.setdefault(key, value)
     return loaded
+
+
+def resolve_env_value(key: str, path: str = ".env") -> str:
+    """Resolve a secret value from process env first, then local .env."""
+    value = os.environ.get(key, "").strip()
+    if value:
+        return value
+    return read_env_file(path).get(key, "").strip()
 
 
 def save_env_values(values: dict[str, str], path: str = ".env"):

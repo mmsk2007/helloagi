@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-import os
 
+from agi_runtime.auth.profiles import AuthProfileManager
+from agi_runtime.config.env import resolve_env_value
 from agi_runtime.config.providers import provider_env_snapshot
 from agi_runtime.config.settings import load_settings
 from agi_runtime.diagnostics.scorecard import run_scorecard
@@ -12,10 +13,14 @@ from agi_runtime.service.manager import ServiceManager
 
 def run_health(config_path: str = "helloagi.json", onboard_path: str = "helloagi.onboard.json") -> dict:
     settings = load_settings(config_path)
+    runtime_root = Path(config_path).resolve().parent
+    env_path = str(runtime_root / ".env")
+    auth_profiles_path = str(runtime_root / "memory" / "auth_profiles.json")
     scorecard = run_scorecard(config_path=config_path, onboard_path=onboard_path)
     service = ServiceManager().status()
     extensions = ExtensionManager().doctor()
-    providers = provider_env_snapshot()
+    auth_profiles = AuthProfileManager(path=auth_profiles_path, env_path=env_path).doctor()
+    providers = provider_env_snapshot(env_path=env_path, auth_profiles_path=auth_profiles_path)
     telegram_status = ExtensionManager().status("telegram")
     discord_status = ExtensionManager().status("discord")
     checks = {
@@ -28,7 +33,7 @@ def run_health(config_path: str = "helloagi.json", onboard_path: str = "helloagi
         "openai_ready": bool(providers.get("openai", {}).get("configured")),
         "telegram_ready": telegram_status.available,
         "discord_ready": discord_status.available,
-        "service_auth_ready": bool(os.environ.get("HELLOAGI_API_KEY")),
+        "service_auth_ready": bool(resolve_env_value("HELLOAGI_API_KEY", env_path)),
         "service_installed": service["installed"],
         "service_running": service["running"],
         "extensions_ready": all(item["available"] for item in extensions["extensions"] if item["enabled"]),
@@ -42,5 +47,6 @@ def run_health(config_path: str = "helloagi.json", onboard_path: str = "helloagi
         "scorecard": scorecard,
         "service": service,
         "extensions": extensions,
+        "auth_profiles": auth_profiles,
         "providers": providers,
     }

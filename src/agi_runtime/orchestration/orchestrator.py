@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import re
 import time
 import uuid
 from typing import Any
@@ -141,6 +142,40 @@ class Orchestrator:
             "metrics": workflow.get("metrics", {}),
             "nodes": node_statuses,
             "history": workflow.get("history", []),
+        }
+
+    def export_run(self, run_id: str) -> dict[str, Any]:
+        workflow = self.resume_run(run_id)
+        nodes = {}
+        for node_id, data in workflow.get("nodes", {}).items():
+            nodes[node_id] = {
+                "status": data.get("status"),
+                "attempts": data.get("attempts"),
+                "title": data.get("title"),
+                "kind": data.get("kind"),
+                "last_output": self._sanitize_output(data.get("last_output", "")),
+            }
+        history = []
+        for item in workflow.get("history", []):
+            payload = dict(item.get("payload", {}))
+            if "output_preview" in payload:
+                payload["output_preview"] = self._sanitize_output(str(payload.get("output_preview", "")))
+            history.append(
+                {
+                    "ts": item.get("ts"),
+                    "kind": item.get("kind"),
+                    "payload": payload,
+                }
+            )
+        return {
+            "id": workflow["id"],
+            "title": workflow.get("title", ""),
+            "status": workflow.get("status"),
+            "created_at": workflow.get("created_at"),
+            "updated_at": workflow.get("updated_at"),
+            "metrics": workflow.get("metrics", {}),
+            "nodes": nodes,
+            "history": history,
         }
 
     def run_once(self, run_id_or_graph, done: set[str] = None) -> list[str]:
@@ -307,3 +342,10 @@ class Orchestrator:
             ],
             reasoning="single-node workflow execution",
         )
+
+    @staticmethod
+    def _sanitize_output(text: str, limit: int = 200) -> str:
+        if not text:
+            return ""
+        redacted = re.sub(r"(?i)\b(sk-[a-z0-9_-]{8,}|[a-z0-9_-]{20,}\.[a-z0-9._-]{6,}\.[a-z0-9._-]{6,})\b", "[redacted]", text)
+        return redacted[:limit]

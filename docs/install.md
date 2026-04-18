@@ -168,12 +168,25 @@ The interactive wizard now does the full runtime setup:
 - runtime mode (`cli`, `hybrid`, or `service`)
 - active provider selection (`template`, `anthropic`, or `google`)
 - provider auth mode (`api_key` or `auth_token`)
+- auth profile creation for the active provider
 - optional OpenAI credential storage for future adapters/tools
 - Telegram and Discord channel enablement
 - local service auth token (`HELLOAGI_API_KEY`)
 - optional migration import from OpenClaw or Hermes
 
 Non-secret onboarding state is saved to `helloagi.onboard.json`; secrets are written to local `.env`.
+
+For scripted installs, you can run onboarding non-interactively:
+
+```bash
+helloagi onboard --non-interactive \
+  --provider anthropic \
+  --auth-mode auth_token \
+  --runtime-mode service \
+  --enable-extension telegram \
+  --agent-name Lana \
+  --owner-name You
+```
 
 ### 2. Initialize runtime config
 
@@ -203,6 +216,7 @@ source .env
 helloagi doctor
 helloagi health
 helloagi doctor-score
+helloagi auth doctor
 helloagi update
 ```
 

@@ -31,3 +31,14 @@ class TestRunsRuntime(unittest.TestCase):
             summary = orch.summarize_run(workflow["id"])
             self.assertEqual(summary["status"], "completed")
             self.assertIn("observe", summary["nodes"])
+
+    def test_export_run_redacts_sensitive_output(self):
+        with TemporaryDirectory() as tmp:
+            store = StateStore(str(Path(tmp) / "runtime_state.json"))
+            orch = Orchestrator(store=store)
+            graph = WorkflowGraph()
+            graph.add_node(WorkflowNode(id="observe", title="Observe", prompt="token sk-secretvalue1234567890"))
+            workflow = orch.run_until_complete(graph, title="export")
+            exported = orch.export_run(workflow["id"])
+            self.assertIn("observe", exported["nodes"])
+            self.assertIn("[redacted]", exported["nodes"]["observe"]["last_output"])

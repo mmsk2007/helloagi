@@ -97,9 +97,9 @@ def _check_journal_health(journal_path: str) -> Check:
     return Check("journal", ok, ", ".join(detail_parts))
 
 
-def _check_provider_readiness(onboard: dict | None) -> Check:
+def _check_provider_readiness(onboard: dict | None, *, env_path: str = ".env", auth_profiles_path: str = "memory/auth_profiles.json") -> Check:
     providers = onboard.get("providers", {}) if isinstance(onboard, dict) else {}
-    env_snapshot = provider_env_snapshot()
+    env_snapshot = provider_env_snapshot(env_path=env_path, auth_profiles_path=auth_profiles_path)
     configured: list[str] = []
     for provider in ("openai", "anthropic", "google"):
         if not isinstance(providers, dict):
@@ -138,6 +138,9 @@ def _check_provider_readiness(onboard: dict | None) -> Check:
 
 def run_scorecard(config_path: str = "helloagi.json", onboard_path: str = "helloagi.onboard.json") -> dict:
     checks: list[Check] = []
+    runtime_root = Path(config_path).resolve().parent
+    env_path = str(runtime_root / ".env")
+    auth_profiles_path = str(runtime_root / "memory" / "auth_profiles.json")
 
     cfg = _load_json(config_path)
     if cfg is None:
@@ -154,7 +157,7 @@ def run_scorecard(config_path: str = "helloagi.json", onboard_path: str = "hello
 
     checks.append(_check_db(db_path))
     checks.append(_check_journal_health(journal_path))
-    checks.append(_check_provider_readiness(onboard))
+    checks.append(_check_provider_readiness(onboard, env_path=env_path, auth_profiles_path=auth_profiles_path))
 
     passed = sum(1 for c in checks if c.ok)
     total = len(checks)

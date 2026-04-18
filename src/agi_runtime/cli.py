@@ -4,6 +4,8 @@ Rich TUI with streaming responses, tool execution panels,
 SRG governance indicators, and slash commands.
 """
 
+from __future__ import annotations
+
 import argparse
 import subprocess
 import sys
@@ -12,37 +14,37 @@ from pathlib import Path
 
 from agi_runtime.config.env import load_local_env
 from agi_runtime.config.settings import load_settings, RuntimeSettings, save_settings
-from agi_runtime.core.agent import HelloAGIAgent
-from agi_runtime.api.server import run_server
-from agi_runtime.autonomy.loop import AutonomousLoop
-from agi_runtime.workflows.graph import WorkflowGraph, WorkflowNode
-from agi_runtime.orchestration.orchestrator import Orchestrator
-from agi_runtime.orchestration.tri_loop import TriLoop
-from agi_runtime.robustness.evaluator import evaluate_consistency
-from agi_runtime.onboarding.wizard import run_wizard, status as onboard_status
-from agi_runtime.storage.migrations import MigrationRunner
-from agi_runtime.storage.sqlite_store import SQLiteStore
-from agi_runtime.diagnostics.health import run_health
-from agi_runtime.diagnostics.scorecard import run_scorecard
-from agi_runtime.diagnostics.replay import replay_last_failure
-from agi_runtime.adapters.openclaw_bridge import run_openclaw_agent
-from agi_runtime.extensions.manager import ExtensionManager
-from agi_runtime.migration.importer import MigrationImporter
-from agi_runtime.service.manager import ServiceManager
 
-# Try to import Rich for enhanced display
-try:
-    from rich.console import Console
-    from rich.panel import Panel
-    from rich.text import Text
-    from rich.table import Table
-    from rich.markdown import Markdown
-    from rich.live import Live
-    from rich.spinner import Spinner
-    from rich.syntax import Syntax
-    _RICH_AVAILABLE = True
-except ImportError:
-    _RICH_AVAILABLE = False
+Console = Panel = Text = Table = Markdown = Live = Spinner = Syntax = None
+_RICH_AVAILABLE: bool | None = None
+
+
+def _ensure_rich() -> bool:
+    global Console, Panel, Text, Table, Markdown, Live, Spinner, Syntax, _RICH_AVAILABLE
+    if _RICH_AVAILABLE is not None:
+        return _RICH_AVAILABLE
+    try:
+        from rich.console import Console as _Console
+        from rich.live import Live as _Live
+        from rich.markdown import Markdown as _Markdown
+        from rich.panel import Panel as _Panel
+        from rich.spinner import Spinner as _Spinner
+        from rich.syntax import Syntax as _Syntax
+        from rich.table import Table as _Table
+        from rich.text import Text as _Text
+
+        Console = _Console
+        Panel = _Panel
+        Text = _Text
+        Table = _Table
+        Markdown = _Markdown
+        Live = _Live
+        Spinner = _Spinner
+        Syntax = _Syntax
+        _RICH_AVAILABLE = True
+    except ImportError:
+        _RICH_AVAILABLE = False
+    return _RICH_AVAILABLE
 
 
 def _configure_stdio():
@@ -77,13 +79,15 @@ def run_rich(goal: str, config_path: str, policy_pack: str = "safe-default"):
     """Run interactive session with Rich TUI."""
     # Auto-onboard on first run
     from agi_runtime.onboarding.wizard import is_onboarded, run_wizard
+    from agi_runtime.core.agent import HelloAGIAgent
+
     if not is_onboarded():
         run_wizard()
 
     settings = load_settings(config_path)
     agent = HelloAGIAgent(settings, policy_pack=policy_pack)
 
-    if _RICH_AVAILABLE:
+    if _ensure_rich():
         console = Console()
 
         # Banner with inspirational quote
@@ -187,14 +191,14 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
             "  /help      — Show this help\n"
             "  exit       — Quit\n"
         )
-        if _RICH_AVAILABLE and console:
+        if _ensure_rich() and console:
             console.print(Panel(help_text, title="Help", border_style="blue"))
         else:
             print(help_text)
 
     elif command == "/tools":
         info = agent.get_tools_info()
-        if _RICH_AVAILABLE and console:
+        if _ensure_rich() and console:
             console.print(Panel(info, title="Available Tools", border_style="green"))
         else:
             print(info)
@@ -225,7 +229,7 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
             f"Purpose: {state.purpose}\n"
             f"Principles:\n" + "\n".join(f"  - {p}" for p in state.principles)
         )
-        if _RICH_AVAILABLE and console:
+        if _ensure_rich() and console:
             console.print(Panel(info, title="Agent Identity", border_style="magenta"))
         else:
             print(info)
@@ -275,7 +279,7 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
         summary = agent.growth.get_growth_summary()
         streak_msg = agent.growth.get_streak_message()
         info = f"{streak_msg}\n\n{summary}"
-        if _RICH_AVAILABLE and console:
+        if _ensure_rich() and console:
             console.print(Panel(info, title="Your Growth", border_style="green"))
         else:
             print(info)
@@ -286,14 +290,14 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
         info = summary
         if guidance:
             info += f"\n\nGuidance: {guidance}"
-        if _RICH_AVAILABLE and console:
+        if _ensure_rich() and console:
             console.print(Panel(info, title="Mood & Emotional Intelligence", border_style="magenta"))
         else:
             print(info)
 
     elif command == "/patterns":
         insights = agent.patterns.get_insights()
-        if _RICH_AVAILABLE and console:
+        if _ensure_rich() and console:
             console.print(Panel(insights, title="Behavioral Patterns", border_style="blue"))
         else:
             print(insights)
@@ -321,7 +325,7 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
             info += "\n\nTool Health:"
             for name, ts in sorted(status["tools"].items()):
                 info += f"\n  {name}: {ts['calls']} calls, {ts['failures']} failures ({ts['failure_rate']:.0%})"
-        if _RICH_AVAILABLE and console:
+        if _ensure_rich() and console:
             console.print(Panel(info, title="Supervisor Status", border_style="yellow"))
         else:
             print(info)
@@ -336,7 +340,7 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
             output = "\n".join(lines)
         else:
             output = "No circuit breakers active yet."
-        if _RICH_AVAILABLE and console:
+        if _ensure_rich() and console:
             console.print(Panel(output, title="Circuit Breakers", border_style="cyan"))
         else:
             print(output)
@@ -351,6 +355,8 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
 
 def run_basic(goal: str, config_path: str, policy_pack: str = "safe-default"):
     """Basic REPL without Rich."""
+    from agi_runtime.core.agent import HelloAGIAgent
+
     settings = load_settings(config_path)
     agent = HelloAGIAgent(settings, policy_pack=policy_pack)
     print("HelloAGI Runtime started.")
@@ -395,6 +401,8 @@ def init_config(path: str):
 
 
 def oneshot(message: str, config_path: str, policy_pack: str = "safe-default"):
+    from agi_runtime.core.agent import HelloAGIAgent
+
     settings = load_settings(config_path)
     agent = HelloAGIAgent(settings, policy_pack=policy_pack)
     r = agent.think(message)
@@ -402,6 +410,9 @@ def oneshot(message: str, config_path: str, policy_pack: str = "safe-default"):
 
 
 def auto(goal: str, steps: int, config_path: str, policy_pack: str = "safe-default"):
+    from agi_runtime.autonomy.loop import AutonomousLoop
+    from agi_runtime.core.agent import HelloAGIAgent
+
     settings = load_settings(config_path)
     agent = HelloAGIAgent(settings, policy_pack=policy_pack)
     loop = AutonomousLoop(agent, goal)
@@ -411,6 +422,8 @@ def auto(goal: str, steps: int, config_path: str, policy_pack: str = "safe-defau
 
 
 def doctor(config_path: str, onboard_path: str = "helloagi.onboard.json"):
+    from agi_runtime.diagnostics.health import run_health
+
     p = Path(config_path)
     s = load_settings(config_path)
     health_report = run_health(config_path=config_path, onboard_path=onboard_path)
@@ -427,6 +440,9 @@ def doctor(config_path: str, onboard_path: str = "helloagi.onboard.json"):
 
 
 def orchestrate_demo():
+    from agi_runtime.orchestration.orchestrator import Orchestrator
+    from agi_runtime.workflows.graph import WorkflowGraph, WorkflowNode
+
     g = WorkflowGraph()
     g.add_node(WorkflowNode(id="observe", title="Observe context", kind="task", prompt="Observation complete"))
     g.add_node(WorkflowNode(id="plan", title="Plan actions", deps=["observe"], kind="task", prompt="Plan complete"))
@@ -437,11 +453,15 @@ def orchestrate_demo():
 
 
 def tri_loop(goal: str):
+    from agi_runtime.orchestration.tri_loop import TriLoop
+
     result = TriLoop().run(goal)
     print(f"tri-loop ok={result.ok} :: {result.summary}")
 
 
 def benchmark_robustness(text: str):
+    from agi_runtime.robustness.evaluator import evaluate_consistency
+
     rep = evaluate_consistency(text)
     print(f"consistency={rep.consistency:.2f}")
     print(f"noisy={rep.noisy_text}")
@@ -449,6 +469,8 @@ def benchmark_robustness(text: str):
 
 
 def db_init(config_path: str):
+    from agi_runtime.storage.migrations import MigrationRunner
+
     s = load_settings(config_path)
     runner = MigrationRunner(db_path=s.db_path, migrations_dir="src/agi_runtime/storage/migrations")
     runner.run()
@@ -456,6 +478,9 @@ def db_init(config_path: str):
 
 
 def db_demo(config_path: str):
+    from agi_runtime.storage.migrations import MigrationRunner
+    from agi_runtime.storage.sqlite_store import SQLiteStore
+
     s = load_settings(config_path)
     runner = MigrationRunner(db_path=s.db_path, migrations_dir="src/agi_runtime/storage/migrations")
     runner.run()
@@ -468,22 +493,71 @@ def db_demo(config_path: str):
 
 
 def doctor_score(config_path: str, onboard_path: str):
+    from agi_runtime.diagnostics.scorecard import run_scorecard
+
     rep = run_scorecard(config_path=config_path, onboard_path=onboard_path)
     print(rep)
 
 
 def health(config_path: str, onboard_path: str):
+    from agi_runtime.diagnostics.health import run_health
+
     rep = run_health(config_path=config_path, onboard_path=onboard_path)
     print(rep)
 
 
 def replay_failure(config_path: str):
+    from agi_runtime.diagnostics.replay import replay_last_failure
+
     s = load_settings(config_path)
     rep = replay_last_failure(journal_path=s.journal_path)
     print(rep)
 
 
+def tools_info(policy_pack: str = "safe-default") -> str:
+    from agi_runtime.policies.packs import get_pack
+    from agi_runtime.tools.registry import ToolRegistry, discover_builtin_tools
+
+    pack = get_pack(policy_pack)
+    discover_builtin_tools()
+    registry = ToolRegistry.get_instance()
+    blocked_in_read_only = {
+        "bash_exec",
+        "python_exec",
+        "file_write",
+        "file_patch",
+        "skill_create",
+        "delegate_task",
+    }
+
+    def allowed(tool_name: str) -> bool:
+        if pack.read_only and tool_name in blocked_in_read_only:
+            return False
+        if pack.allowed_tools and tool_name not in pack.allowed_tools:
+            return False
+        if pack.blocked_tools and tool_name in pack.blocked_tools:
+            return False
+        return True
+
+    tools = [tool for tool in registry.list_tools() if allowed(tool.name)]
+    if not tools:
+        return "No tools available."
+
+    lines: list[str] = []
+    current_toolset = None
+    for tool in sorted(tools, key=lambda item: (item.toolset.value, item.name)):
+        if tool.toolset != current_toolset:
+            current_toolset = tool.toolset
+            lines.append(f"\n[{current_toolset.value.upper()}]")
+        risk_icon = {"none": "[ ]", "low": "[+]", "medium": "[!]", "high": "[x]"}.get(tool.risk.value, "[ ]")
+        lines.append(f"  {risk_icon} {tool.name}: {tool.description}")
+    return "\n".join(lines)
+
+
 def service_install(args):
+    from agi_runtime.extensions.manager import ExtensionManager
+    from agi_runtime.service.manager import ServiceManager
+
     extension_names = list(args.extension or [])
     for enabled_name in ExtensionManager().enabled_names(category="channel"):
         if enabled_name not in extension_names:
@@ -497,6 +571,7 @@ def service_install(args):
         discord=args.discord,
         enabled_extensions=extension_names,
         workdir=args.workdir,
+        require_auth=True,
     )
     print(
         {
@@ -508,6 +583,8 @@ def service_install(args):
             "extensions": cfg.enabled_extensions,
             "host": cfg.host,
             "port": cfg.port,
+            "auth_required": cfg.auth_required,
+            "auth_env_key": cfg.auth_env_key,
             "policy_pack": cfg.policy_pack,
             "last_error": cfg.last_error,
         }
@@ -515,51 +592,73 @@ def service_install(args):
 
 
 def service_start():
+    from agi_runtime.service.manager import ServiceManager
+
     cfg = ServiceManager().start()
     print(ServiceManager().status())
 
 
 def service_stop():
+    from agi_runtime.service.manager import ServiceManager
+
     cfg = ServiceManager().stop()
     print(ServiceManager().status())
 
 
 def service_status():
+    from agi_runtime.service.manager import ServiceManager
+
     print(ServiceManager().status())
 
 
 def service_uninstall():
+    from agi_runtime.service.manager import ServiceManager
+
     cfg = ServiceManager().uninstall()
     print({"installed": cfg.installed, "running": False, "backend": cfg.backend})
 
 
 def migrate(source: str, path: str = None, apply: bool = False, overwrite: bool = False, rename_imports: bool = False):
+    from agi_runtime.migration.importer import MigrationImporter
+
     importer = MigrationImporter()
     report = importer.apply(source, path, overwrite=overwrite, rename_imports=rename_imports) if apply else importer.preview(source, path)
     print(asdict(report))
 
 
 def extensions_list(enabled_only: bool = False):
+    from agi_runtime.extensions.manager import ExtensionManager
+
     print(ExtensionManager().doctor(enabled_only=enabled_only))
 
 
 def extensions_info(name: str):
+    from agi_runtime.extensions.manager import ExtensionManager
+
     print(asdict(ExtensionManager().status(name)))
 
 
 def extensions_enable(name: str):
+    from agi_runtime.extensions.manager import ExtensionManager
+
     print(asdict(ExtensionManager().enable(name)))
 
 
 def extensions_disable(name: str):
+    from agi_runtime.extensions.manager import ExtensionManager
+
     print(asdict(ExtensionManager().disable(name)))
 
 
 def extensions_doctor(enabled_only: bool = False):
+    from agi_runtime.extensions.manager import ExtensionManager
+
     print(ExtensionManager().doctor(enabled_only=enabled_only))
 
 
 def runs_list():
+    from agi_runtime.orchestration.orchestrator import Orchestrator
+
     orch = Orchestrator()
     print(
         [
@@ -577,22 +676,73 @@ def runs_list():
 
 
 def runs_show(run_id: str):
+    from agi_runtime.orchestration.orchestrator import Orchestrator
+
     orch = Orchestrator()
     print(orch.summarize_run(run_id))
 
 
 def runs_resume(run_id: str):
+    from agi_runtime.orchestration.orchestrator import Orchestrator
+
     orch = Orchestrator()
     print(orch.continue_run(run_id))
 
 
 def runs_cancel(run_id: str):
+    from agi_runtime.orchestration.orchestrator import Orchestrator
+
     orch = Orchestrator()
     print(orch.cancel_run(run_id))
 
 
+def runs_export(run_id: str):
+    from agi_runtime.orchestration.orchestrator import Orchestrator
+
+    orch = Orchestrator()
+    print(orch.export_run(run_id))
+
+
+def auth_list(provider: str | None = None):
+    from agi_runtime.auth.profiles import AuthProfileManager
+
+    manager = AuthProfileManager()
+    print(
+        {
+            "profiles": [asdict(profile) for profile in manager.list_profiles(provider)],
+            "active_profiles": manager.load_state().get("active_profiles", {}),
+        }
+    )
+
+
+def auth_show(name: str):
+    from agi_runtime.auth.profiles import AuthProfileManager
+
+    print(asdict(AuthProfileManager().get_profile(name)))
+
+
+def auth_activate(name: str):
+    from agi_runtime.auth.profiles import AuthProfileManager
+
+    print(asdict(AuthProfileManager().activate(name)))
+
+
+def auth_deactivate(name: str):
+    from agi_runtime.auth.profiles import AuthProfileManager
+
+    print(asdict(AuthProfileManager().deactivate(name)))
+
+
+def auth_doctor():
+    from agi_runtime.auth.profiles import AuthProfileManager
+
+    print(AuthProfileManager().doctor())
+
+
 def openclaw(prompt: str, config_path: str, policy_pack: str = "safe-default"):
     import anyio
+    from agi_runtime.adapters.openclaw_bridge import run_openclaw_agent
+
     settings = load_settings(config_path)
     task = anyio.run(run_openclaw_agent, prompt, settings, policy_pack)
     confirm_flag = "[requires-confirm]" if task.requires_human_confirm else "[auto]"
@@ -619,6 +769,9 @@ def uninstall_installation(yes: bool = False):
 def _serve_with_channels(args):
     """Start HTTP API with optional Telegram/Discord channels."""
     import asyncio
+    from agi_runtime.core.agent import HelloAGIAgent
+    from agi_runtime.extensions.manager import ExtensionManager
+
     settings = load_settings(args.config)
     agent = HelloAGIAgent(settings, policy_pack=args.policy)
 
@@ -637,10 +790,15 @@ def _serve_with_channels(args):
     # Start HTTP server in a thread, channels via asyncio
     import threading
     from agi_runtime.api.server import HelloAGIHandler, ThreadedHTTPServer
-    import os
+    from agi_runtime.config.env import resolve_env_value
 
     HelloAGIHandler.agent = agent
-    HelloAGIHandler.api_key = os.environ.get("HELLOAGI_API_KEY")
+    api_key = resolve_env_value("HELLOAGI_API_KEY")
+    if args.require_auth and not api_key:
+        raise RuntimeError("HELLOAGI_API_KEY is required when --require-auth is enabled.")
+    HelloAGIHandler.api_key = api_key if (args.require_auth or api_key) else None
+    HelloAGIHandler.auth_required = bool(args.require_auth or api_key)
+    HelloAGIHandler.auth_env_key = "HELLOAGI_API_KEY"
     srv = ThreadedHTTPServer((args.host, args.port), HelloAGIHandler)
 
     http_thread = threading.Thread(target=srv.serve_forever, daemon=True)
@@ -649,7 +807,7 @@ def _serve_with_channels(args):
 
     # Windows default (Proactor) often logs "Event loop is closed" from asyncio
     # transports when the loop shuts down; Selector avoids it for polling bots.
-    if os.name == "nt":
+    if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
     try:
@@ -701,6 +859,7 @@ def main():
     serverp.add_argument("--telegram", action="store_true", help="also start Telegram bot")
     serverp.add_argument("--discord", action="store_true", help="also start Discord bot")
     serverp.add_argument("--extension", action="append", default=[], help="enable a named extension (repeatable)")
+    serverp.add_argument("--require-auth", action="store_true", help="require HELLOAGI_API_KEY for API access")
     serverp.add_argument("--config", default="helloagi.json")
     serverp.add_argument("--policy", default="safe-default")
 
@@ -758,10 +917,24 @@ def main():
     runs_sub.add_parser("list", help="list workflow runs")
     runs_showp = runs_sub.add_parser("show", help="show a workflow run")
     runs_showp.add_argument("run_id")
+    runs_exportp = runs_sub.add_parser("export", help="export a redacted workflow run summary")
+    runs_exportp.add_argument("run_id")
     runs_resumep = runs_sub.add_parser("resume", help="resume a workflow run until idle or terminal")
     runs_resumep.add_argument("run_id")
     runs_cancelp = runs_sub.add_parser("cancel", help="cancel a workflow run")
     runs_cancelp.add_argument("run_id")
+
+    authp = sub.add_parser("auth", help="manage provider auth profiles")
+    auth_sub = authp.add_subparsers(dest="auth_cmd")
+    auth_listp = auth_sub.add_parser("list", help="list auth profiles")
+    auth_listp.add_argument("--provider", choices=["anthropic", "google", "openai"], default=None)
+    auth_showp = auth_sub.add_parser("show", help="show an auth profile")
+    auth_showp.add_argument("name")
+    auth_activatep = auth_sub.add_parser("activate", help="activate an auth profile")
+    auth_activatep.add_argument("name")
+    auth_deactivatep = auth_sub.add_parser("deactivate", help="deactivate an auth profile")
+    auth_deactivatep.add_argument("name")
+    auth_sub.add_parser("doctor", help="check auth profile readiness")
 
     sub.add_parser("orchestrate-demo", help="run orchestration DAG demo")
     tri = sub.add_parser("tri-loop", help="run planner/executor/verifier loop")
@@ -772,6 +945,17 @@ def main():
 
     onboard = sub.add_parser("onboard", help="run local onboarding wizard")
     onboard.add_argument("--path", default="helloagi.onboard.json")
+    onboard.add_argument("--non-interactive", action="store_true", help="configure onboarding from flags and env without prompts")
+    onboard.add_argument("--runtime-mode", choices=["cli", "hybrid", "service"], default=None)
+    onboard.add_argument("--provider", choices=["template", "anthropic", "google"], default=None)
+    onboard.add_argument("--auth-mode", choices=["api_key", "auth_token"], default=None)
+    onboard.add_argument("--service-auth-token", default=None)
+    onboard.add_argument("--enable-extension", action="append", default=[], help="enable an extension during onboarding (repeatable)")
+    onboard.add_argument("--import-source", choices=["openclaw", "hermes"], default=None)
+    onboard.add_argument("--agent-name", default=None)
+    onboard.add_argument("--owner-name", default=None)
+    onboard.add_argument("--focus", choices=["general", "coding", "research", "creative"], default=None)
+    onboard.add_argument("--model-tier", choices=["speed", "balanced", "quality"], default=None)
 
     obstat = sub.add_parser("onboard-status", help="show onboarding status")
     obstat.add_argument("--path", default="helloagi.onboard.json")
@@ -818,10 +1002,13 @@ def main():
     elif args.cmd == "auto":
         auto(args.goal, args.steps, args.config, args.policy)
     elif args.cmd == "serve":
+        from agi_runtime.api.server import run_server
+        from agi_runtime.extensions.manager import ExtensionManager
+
         if args.telegram or args.discord or args.extension or ExtensionManager().enabled_names(category="channel"):
             _serve_with_channels(args)
         else:
-            run_server(args.host, args.port, getattr(args, "config", "helloagi.json"), args.policy)
+            run_server(args.host, args.port, getattr(args, "config", "helloagi.json"), args.policy, require_auth=args.require_auth)
     elif args.cmd == "doctor":
         doctor(args.config, args.onboard)
     elif args.cmd == "health":
@@ -863,12 +1050,27 @@ def main():
             runs_list()
         elif args.runs_cmd == "show":
             runs_show(args.run_id)
+        elif args.runs_cmd == "export":
+            runs_export(args.run_id)
         elif args.runs_cmd == "resume":
             runs_resume(args.run_id)
         elif args.runs_cmd == "cancel":
             runs_cancel(args.run_id)
         else:
-            parser.error("runs requires a subcommand: list, show, resume, cancel")
+            parser.error("runs requires a subcommand: list, show, export, resume, cancel")
+    elif args.cmd == "auth":
+        if args.auth_cmd == "list":
+            auth_list(args.provider)
+        elif args.auth_cmd == "show":
+            auth_show(args.name)
+        elif args.auth_cmd == "activate":
+            auth_activate(args.name)
+        elif args.auth_cmd == "deactivate":
+            auth_deactivate(args.name)
+        elif args.auth_cmd == "doctor":
+            auth_doctor()
+        else:
+            parser.error("auth requires a subcommand: list, show, activate, deactivate, doctor")
     elif args.cmd == "orchestrate-demo":
         orchestrate_demo()
     elif args.cmd == "tri-loop":
@@ -876,8 +1078,27 @@ def main():
     elif args.cmd == "benchmark-robustness":
         benchmark_robustness(args.text)
     elif args.cmd == "onboard":
-        run_wizard(args.path)
+        from agi_runtime.onboarding.wizard import WizardOptions, run_wizard
+
+        run_wizard(
+            args.path,
+            WizardOptions(
+                non_interactive=args.non_interactive,
+                runtime_mode=args.runtime_mode,
+                provider=args.provider,
+                auth_mode=args.auth_mode,
+                service_auth_token=args.service_auth_token,
+                enable_extensions=list(args.enable_extension or []),
+                import_source=args.import_source,
+                agent_name=args.agent_name,
+                owner_name=args.owner_name,
+                focus=args.focus,
+                model_tier=args.model_tier,
+            ),
+        )
     elif args.cmd == "onboard-status":
+        from agi_runtime.onboarding.wizard import status as onboard_status
+
         onboard_status(args.path)
     elif args.cmd == "db-init":
         db_init(args.config)
@@ -890,10 +1111,7 @@ def main():
     elif args.cmd == "openclaw":
         openclaw(args.prompt, args.config, args.policy)
     elif args.cmd == "tools":
-        from agi_runtime.tools.registry import ToolRegistry, discover_builtin_tools
-        discover_builtin_tools()
-        agent = HelloAGIAgent(policy_pack=args.policy)
-        print(agent.get_tools_info())
+        print(tools_info(args.policy))
     elif args.cmd == "skills":
         from agi_runtime.skills.manager import SkillManager
         sm = SkillManager()
@@ -905,6 +1123,7 @@ def main():
             print("No skills learned yet.")
     elif args.cmd == "dashboard":
         from agi_runtime.diagnostics.dashboard import run_dashboard
+        from agi_runtime.core.agent import HelloAGIAgent
         settings = load_settings(args.config)
         agent = HelloAGIAgent(settings, policy_pack=args.policy)
         run_dashboard(agent=agent)
