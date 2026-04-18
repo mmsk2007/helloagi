@@ -25,7 +25,7 @@ irm https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/install.ps1
 ## PyPI install
 
 ```bash
-python -m pip install --user --upgrade "helloagi[rich]"
+python -m pip install --user --upgrade "helloagi[rich,telegram]"
 ```
 
 ## Git install
@@ -38,6 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/inst
 
 ```bash
 helloagi tools
+helloagi health
 python -m agi_runtime.cli doctor
 python -m agi_runtime.cli onboard-status
 ```

@@ -33,6 +33,9 @@ class TestCLIContract(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("update", result.stdout)
         self.assertIn("uninstall", result.stdout)
+        self.assertIn("service", result.stdout)
+        self.assertIn("health", result.stdout)
+        self.assertIn("migrate", result.stdout)
 
     def test_tools_command_does_not_crash_on_windows_encoding(self):
         result = self.run_cli("tools", "--policy", "reviewer")

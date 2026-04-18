@@ -7,6 +7,7 @@ SRG governance indicators, and slash commands.
 import argparse
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 
 from agi_runtime.config.env import load_local_env
@@ -21,9 +22,12 @@ from agi_runtime.robustness.evaluator import evaluate_consistency
 from agi_runtime.onboarding.wizard import run_wizard, status as onboard_status
 from agi_runtime.storage.migrations import MigrationRunner
 from agi_runtime.storage.sqlite_store import SQLiteStore
+from agi_runtime.diagnostics.health import run_health
 from agi_runtime.diagnostics.scorecard import run_scorecard
 from agi_runtime.diagnostics.replay import replay_last_failure
 from agi_runtime.adapters.openclaw_bridge import run_openclaw_agent
+from agi_runtime.migration.importer import MigrationImporter
+from agi_runtime.service.manager import ServiceManager
 
 # Try to import Rich for enhanced display
 try:
@@ -416,17 +420,12 @@ def doctor(config_path: str):
 
 def orchestrate_demo():
     g = WorkflowGraph()
-    g.add_node(WorkflowNode(id="observe", title="Observe context"))
-    g.add_node(WorkflowNode(id="plan", title="Plan actions", deps=["observe"]))
-    g.add_node(WorkflowNode(id="execute", title="Execute safe actions", deps=["plan"]))
-    done = set()
+    g.add_node(WorkflowNode(id="observe", title="Observe context", kind="task", prompt="Observation complete"))
+    g.add_node(WorkflowNode(id="plan", title="Plan actions", deps=["observe"], kind="task", prompt="Plan complete"))
+    g.add_node(WorkflowNode(id="execute", title="Execute safe actions", deps=["plan"], kind="verification", prompt="Execution reviewed"))
     orch = Orchestrator()
-    for _ in range(3):
-        ex = orch.run_once(g, done)
-        if not ex:
-            break
-        print("executed:", ", ".join(ex))
-    print("done:", ", ".join(sorted(done)))
+    result = orch.run_until_complete(g, title="demo workflow")
+    print(result)
 
 
 def tri_loop(goal: str):
@@ -465,10 +464,52 @@ def doctor_score(config_path: str, onboard_path: str):
     print(rep)
 
 
+def health(config_path: str, onboard_path: str):
+    rep = run_health(config_path=config_path, onboard_path=onboard_path)
+    print(rep)
+
+
 def replay_failure(config_path: str):
     s = load_settings(config_path)
     rep = replay_last_failure(journal_path=s.journal_path)
     print(rep)
+
+
+def service_install(args):
+    cfg = ServiceManager().install(
+        host=args.host,
+        port=args.port,
+        config_path=args.config,
+        policy_pack=args.policy,
+        telegram=args.telegram,
+        discord=args.discord,
+    )
+    print({"installed": cfg.installed, "host": cfg.host, "port": cfg.port, "policy_pack": cfg.policy_pack})
+
+
+def service_start():
+    cfg = ServiceManager().start()
+    print({"running": True, "pid": cfg.pid, "host": cfg.host, "port": cfg.port})
+
+
+def service_stop():
+    cfg = ServiceManager().stop()
+    print({"running": False, "host": cfg.host, "port": cfg.port})
+
+
+def service_status():
+    print(ServiceManager().status())
+
+
+def service_uninstall():
+    cfg = ServiceManager().uninstall()
+    print({"installed": cfg.installed, "running": False})
+
+
+def migrate(source: str, path: str = None, apply: bool = False):
+    importer = MigrationImporter()
+    report = importer.apply(source, path) if apply else importer.preview(source, path)
+    print(asdict(report))
 
 
 def openclaw(prompt: str, config_path: str, policy_pack: str = "safe-default"):
@@ -479,7 +520,7 @@ def openclaw(prompt: str, config_path: str, policy_pack: str = "safe-default"):
     print(f"openclaw {confirm_flag}\n{task.summary}")
 
 
-def update_installation(package: str = "helloagi[rich]"):
+def update_installation(package: str = "helloagi[rich,telegram]"):
     """Update HelloAGI in the current Python environment."""
     print(f"Updating {package}...")
     raise SystemExit(_run_pip_command(["install", "--user", "--upgrade", package]))
@@ -590,11 +631,34 @@ def main():
     docp = sub.add_parser("doctor", help="check local runtime state")
     docp.add_argument("--config", default="helloagi.json")
 
+    healthp = sub.add_parser("health", help="run full local health checks")
+    healthp.add_argument("--config", default="helloagi.json")
+    healthp.add_argument("--onboard", default="helloagi.onboard.json")
+
     updatep = sub.add_parser("update", help="update HelloAGI in the current Python environment")
-    updatep.add_argument("--package", default="helloagi[rich]")
+    updatep.add_argument("--package", default="helloagi[rich,telegram]")
 
     uninstallp = sub.add_parser("uninstall", help="uninstall HelloAGI from the current Python environment")
     uninstallp.add_argument("--yes", action="store_true", help="confirm uninstall")
+
+    servicep = sub.add_parser("service", help="manage local HelloAGI background service")
+    service_sub = servicep.add_subparsers(dest="service_cmd")
+    service_installp = service_sub.add_parser("install", help="install local service config")
+    service_installp.add_argument("--host", default="127.0.0.1")
+    service_installp.add_argument("--port", type=int, default=8787)
+    service_installp.add_argument("--config", default="helloagi.json")
+    service_installp.add_argument("--policy", default="safe-default")
+    service_installp.add_argument("--telegram", action="store_true")
+    service_installp.add_argument("--discord", action="store_true")
+    service_sub.add_parser("start", help="start local background service")
+    service_sub.add_parser("stop", help="stop local background service")
+    service_sub.add_parser("status", help="show local background service status")
+    service_sub.add_parser("uninstall", help="remove local background service config")
+
+    migratep = sub.add_parser("migrate", help="import config and secrets from another agent runtime")
+    migratep.add_argument("--source", choices=["openclaw", "hermes"], required=True)
+    migratep.add_argument("--path", default=None)
+    migratep.add_argument("--apply", action="store_true", help="apply the import instead of preview only")
 
     sub.add_parser("orchestrate-demo", help="run orchestration DAG demo")
     tri = sub.add_parser("tri-loop", help="run planner/executor/verifier loop")
@@ -657,10 +721,27 @@ def main():
             run_server(args.host, args.port, getattr(args, "config", "helloagi.json"), args.policy)
     elif args.cmd == "doctor":
         doctor(args.config)
+    elif args.cmd == "health":
+        health(args.config, args.onboard)
     elif args.cmd == "update":
         update_installation(args.package)
     elif args.cmd == "uninstall":
         uninstall_installation(args.yes)
+    elif args.cmd == "service":
+        if args.service_cmd == "install":
+            service_install(args)
+        elif args.service_cmd == "start":
+            service_start()
+        elif args.service_cmd == "stop":
+            service_stop()
+        elif args.service_cmd == "status":
+            service_status()
+        elif args.service_cmd == "uninstall":
+            service_uninstall()
+        else:
+            parser.error("service requires a subcommand: install, start, stop, status, uninstall")
+    elif args.cmd == "migrate":
+        migrate(args.source, args.path, args.apply)
     elif args.cmd == "orchestrate-demo":
         orchestrate_demo()
     elif args.cmd == "tri-loop":

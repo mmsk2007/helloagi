@@ -27,7 +27,7 @@ This follows the same flow on Windows and launches onboarding without requiring 
 ## Option B: PyPI Install
 
 ```bash
-python -m pip install --user "helloagi[rich]"
+python -m pip install --user "helloagi[rich,telegram]"
 python -m agi_runtime.cli onboard
 ```
 
@@ -111,6 +111,7 @@ source .env
 
 ```bash
 helloagi doctor
+helloagi health
 helloagi doctor-score
 helloagi update
 ```
@@ -140,6 +141,15 @@ helloagi tri-loop --goal "build a growth engine"
 
 # Claude Agent SDK mode
 helloagi openclaw --prompt "Help me architect a microservice"
+
+# Local background service
+helloagi service install --telegram
+helloagi service start
+helloagi service status
+
+# Migration preview/apply
+helloagi migrate --source openclaw
+helloagi migrate --source hermes --apply
 ```
 
 ---
@@ -167,6 +177,8 @@ curl -s http://127.0.0.1:8787/chat \
 | `ModuleNotFoundError: anthropic` | Run `pip install anthropic` |
 | Agent returns template responses | Set `ANTHROPIC_API_KEY` for Claude backbone |
 | Doctor shows missing files | Run `helloagi init` first |
+| Service is installed but not reachable | Run `helloagi service status` then `helloagi health` |
+| Want to import another agent setup | Run `helloagi migrate --source openclaw` or `helloagi migrate --source hermes` |
 | Port 8787 in use | Use `--port 8788` or stop the other process |
 | Need to remove the package safely | Run `helloagi uninstall --yes` |
 

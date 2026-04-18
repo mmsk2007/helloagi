@@ -116,6 +116,11 @@ helloagi oneshot --message "What can you do?"   # Single question
 helloagi serve                                  # HTTP API on localhost:8787
 helloagi serve --telegram                       # + Telegram bot
 helloagi serve --discord                        # + Discord bot
+helloagi health                                 # Full local runtime + service health
+helloagi service install --telegram             # Install local background service config
+helloagi service start                          # Start local background service
+helloagi service status                         # Inspect service + health
+helloagi migrate --source openclaw              # Preview import from OpenClaw
 helloagi dashboard                              # Live monitoring dashboard
 helloagi tools                                  # List all 17 tools
 helloagi skills                                 # List learned skills

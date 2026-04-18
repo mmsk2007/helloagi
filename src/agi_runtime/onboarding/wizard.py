@@ -154,6 +154,8 @@ def _detect_environment() -> dict:
     env["has_openai_key"] = bool(os.environ.get("OPENAI_API_KEY"))
     env["has_google_key"] = bool(os.environ.get("GOOGLE_API_KEY"))
     env["has_telegram_token"] = bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
+    env["has_openclaw_home"] = (Path.home() / ".openclaw").exists()
+    env["has_hermes_home"] = (Path.home() / ".hermes").exists()
 
     try:
         import telegram  # noqa: F401
@@ -265,6 +267,10 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         _ok("Telegram library available")
     else:
         _warn("Telegram bot library not installed. Run: pip install 'helloagi[telegram]'")
+    if env.get("has_openclaw_home"):
+        _info("OpenClaw install detected. Import with: helloagi migrate --source openclaw --apply")
+    if env.get("has_hermes_home"):
+        _info("Hermes install detected. Import with: helloagi migrate --source hermes --apply")
     print()
 
     # Step 2: Agent Identity
