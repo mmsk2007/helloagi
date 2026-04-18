@@ -126,7 +126,7 @@ helloagi uninstall --yes                        # Remove installed package
 ### Other Install Paths
 
 ```bash
-pip install --user "helloagi[rich]"             # Fast PyPI install
+pip install --user "helloagi[rich,telegram]"    # Fast PyPI install
 python -m agi_runtime.cli onboard               # Launch onboarding even before PATH refresh
 ```
 

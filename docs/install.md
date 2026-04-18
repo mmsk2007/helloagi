@@ -85,7 +85,7 @@ The container runs the HTTP API server on port 8787 by default.
 helloagi onboard
 ```
 
-The interactive wizard configures agent identity, timezone, model tier, and API keys. Saves to `helloagi.onboard.json`.
+The interactive wizard configures agent identity, timezone, model tier, provider keys, and optional Telegram bot token. Non-secret onboarding state is saved to `helloagi.onboard.json`; secrets are written to local `.env`.
 
 ### 2. Initialize runtime config
 
@@ -103,6 +103,7 @@ cp .env.example .env
 #   ANTHROPIC_API_KEY=sk-ant-...
 #   OPENAI_API_KEY=sk-...        (optional)
 #   GOOGLE_API_KEY=...           (optional)
+#   TELEGRAM_BOT_TOKEN=...       (optional)
 source .env
 ```
 

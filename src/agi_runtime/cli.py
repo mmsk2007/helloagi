@@ -9,6 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from agi_runtime.config.env import load_local_env
 from agi_runtime.config.settings import load_settings, RuntimeSettings, save_settings
 from agi_runtime.core.agent import HelloAGIAgent
 from agi_runtime.api.server import run_server
@@ -545,6 +546,7 @@ def _serve_with_channels(args):
 
 def main():
     _configure_stdio()
+    load_local_env()
     parser = argparse.ArgumentParser(
         description="HelloAGI — Governed Autonomous Intelligence",
         formatter_class=argparse.RawDescriptionHelpFormatter,

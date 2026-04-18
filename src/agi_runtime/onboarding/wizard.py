@@ -16,6 +16,8 @@ import shutil
 import platform
 import time
 
+from agi_runtime.config.env import load_local_env, save_env_values
+
 
 # ── ANSI helpers ──────────────────────────────────────────────────────────────
 
@@ -95,14 +97,14 @@ def _info(msg: str):
 
 @dataclass
 class ProviderKeys:
-    openai_api_key: str = ""
-    anthropic_api_key: str = ""
-    google_api_key: str = ""
+    openai_api_key: bool = False
+    anthropic_api_key: bool = False
+    google_api_key: bool = False
 
 
 @dataclass
 class ChannelKeys:
-    telegram_bot_token: str = ""
+    telegram_bot_token: bool = False
 
 
 @dataclass
@@ -135,6 +137,7 @@ def _write_private_json(path: Path, data: dict):
 
 def _detect_environment() -> dict:
     """Auto-detect the user's environment for optimal configuration."""
+    load_local_env()
     env = {
         "os": platform.system(),
         "os_version": platform.version(),
@@ -367,6 +370,14 @@ def run_wizard(path: str = "helloagi.onboard.json"):
                 _fail(f"{name}: {err[:60]}")
 
     # Save configuration
+    env_updates = {
+        "ANTHROPIC_API_KEY": anthropic_key,
+        "OPENAI_API_KEY": openai_key,
+        "GOOGLE_API_KEY": google_key,
+        "TELEGRAM_BOT_TOKEN": telegram_token,
+    }
+    save_env_values(env_updates)
+
     cfg = OnboardConfig(
         agent_name=agent_name,
         owner_name=owner_name,
@@ -374,12 +385,12 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         default_model_tier=tier,
         focus=focus,
         providers=ProviderKeys(
-            openai_api_key=openai_key,
-            anthropic_api_key=anthropic_key,
-            google_api_key=google_key,
+            openai_api_key=bool(openai_key or env.get("has_openai_key")),
+            anthropic_api_key=bool(anthropic_key or env.get("has_anthropic_key")),
+            google_api_key=bool(google_key or env.get("has_google_key")),
         ),
         channels=ChannelKeys(
-            telegram_bot_token=telegram_token,
+            telegram_bot_token=bool(telegram_token or env.get("has_telegram_token")),
         ),
         env_detected=env,
         setup_complete=True,
@@ -445,9 +456,9 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     print(f"      {DIM}Live monitoring dashboard{NC}")
     print()
 
-    if not anthropic_key and not env.get("has_anthropic_key"):
+    if not (anthropic_key or env.get("has_anthropic_key")):
         print(f"  {YELLOW}Tip:{NC} For full AGI capabilities, set your API key:")
-        print(f"    {BOLD}export ANTHROPIC_API_KEY=sk-ant-...{NC}")
+        print(f"    {BOLD}Edit .env and add ANTHROPIC_API_KEY=sk-ant-...{NC}")
         print()
 
 
@@ -469,11 +480,11 @@ def status(path: str = "helloagi.onboard.json"):
     print(f"  Model tier: {data.get('default_model_tier')}")
     print(f"  API keys:")
     for k in ["anthropic_api_key", "openai_api_key", "google_api_key"]:
-        v = providers.get(k, "")
+        v = providers.get(k, False)
         label = k.replace("_api_key", "").capitalize()
         status_str = f"{GREEN}set{NC}" if v else f"{DIM}not set{NC}"
         print(f"    {label}: {status_str}")
-    telegram_status = f"{GREEN}set{NC}" if channels.get("telegram_bot_token", "") else f"{DIM}not set{NC}"
+    telegram_status = f"{GREEN}set{NC}" if channels.get("telegram_bot_token", False) else f"{DIM}not set{NC}"
     print(f"  Channels:")
     print(f"    Telegram: {telegram_status}")
 
