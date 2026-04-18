@@ -36,6 +36,8 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("service", result.stdout)
         self.assertIn("health", result.stdout)
         self.assertIn("migrate", result.stdout)
+        self.assertIn("extensions", result.stdout)
+        self.assertIn("runs", result.stdout)
 
     def test_tools_command_does_not_crash_on_windows_encoding(self):
         result = self.run_cli("tools", "--policy", "reviewer")
@@ -67,6 +69,16 @@ class TestCLIContract(unittest.TestCase):
                     os.environ.pop("TELEGRAM_BOT_TOKEN", None)
                 else:
                     os.environ["TELEGRAM_BOT_TOKEN"] = old
+
+    def test_service_help_exposes_extension_flag(self):
+        result = self.run_cli("service", "install", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--extension", result.stdout)
+
+    def test_extensions_help_is_exposed(self):
+        result = self.run_cli("extensions", "list")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("extensions", result.stdout.lower())
 
 
 if __name__ == "__main__":

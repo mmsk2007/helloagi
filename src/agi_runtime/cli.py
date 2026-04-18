@@ -26,6 +26,7 @@ from agi_runtime.diagnostics.health import run_health
 from agi_runtime.diagnostics.scorecard import run_scorecard
 from agi_runtime.diagnostics.replay import replay_last_failure
 from agi_runtime.adapters.openclaw_bridge import run_openclaw_agent
+from agi_runtime.extensions.manager import ExtensionManager
 from agi_runtime.migration.importer import MigrationImporter
 from agi_runtime.service.manager import ServiceManager
 
@@ -409,13 +410,20 @@ def auto(goal: str, steps: int, config_path: str, policy_pack: str = "safe-defau
         print(f"step {i}: [{r.decision}:{r.risk:.2f}] {r.text}")
 
 
-def doctor(config_path: str):
+def doctor(config_path: str, onboard_path: str = "helloagi.onboard.json"):
     p = Path(config_path)
-    print(f"Config exists: {p.exists()} ({config_path})")
     s = load_settings(config_path)
-    print(f"Identity file: {s.memory_path}")
-    print(f"Journal file: {s.journal_path}")
-    print(f"DB file: {s.db_path}")
+    health_report = run_health(config_path=config_path, onboard_path=onboard_path)
+    print(
+        {
+            "config_exists": p.exists(),
+            "config_path": config_path,
+            "identity_file": s.memory_path,
+            "journal_file": s.journal_path,
+            "db_file": s.db_path,
+            "health": health_report,
+        }
+    )
 
 
 def orchestrate_demo():
@@ -476,6 +484,10 @@ def replay_failure(config_path: str):
 
 
 def service_install(args):
+    extension_names = list(args.extension or [])
+    for enabled_name in ExtensionManager().enabled_names(category="channel"):
+        if enabled_name not in extension_names:
+            extension_names.append(enabled_name)
     cfg = ServiceManager().install(
         host=args.host,
         port=args.port,
@@ -483,18 +495,33 @@ def service_install(args):
         policy_pack=args.policy,
         telegram=args.telegram,
         discord=args.discord,
+        enabled_extensions=extension_names,
+        workdir=args.workdir,
     )
-    print({"installed": cfg.installed, "host": cfg.host, "port": cfg.port, "policy_pack": cfg.policy_pack})
+    print(
+        {
+            "installed": cfg.installed,
+            "backend": cfg.backend,
+            "native_registered": cfg.native_registered,
+            "manifest_path": cfg.manifest_path,
+            "workdir": cfg.workdir,
+            "extensions": cfg.enabled_extensions,
+            "host": cfg.host,
+            "port": cfg.port,
+            "policy_pack": cfg.policy_pack,
+            "last_error": cfg.last_error,
+        }
+    )
 
 
 def service_start():
     cfg = ServiceManager().start()
-    print({"running": True, "pid": cfg.pid, "host": cfg.host, "port": cfg.port})
+    print(ServiceManager().status())
 
 
 def service_stop():
     cfg = ServiceManager().stop()
-    print({"running": False, "host": cfg.host, "port": cfg.port})
+    print(ServiceManager().status())
 
 
 def service_status():
@@ -503,13 +530,65 @@ def service_status():
 
 def service_uninstall():
     cfg = ServiceManager().uninstall()
-    print({"installed": cfg.installed, "running": False})
+    print({"installed": cfg.installed, "running": False, "backend": cfg.backend})
 
 
-def migrate(source: str, path: str = None, apply: bool = False):
+def migrate(source: str, path: str = None, apply: bool = False, overwrite: bool = False, rename_imports: bool = False):
     importer = MigrationImporter()
-    report = importer.apply(source, path) if apply else importer.preview(source, path)
+    report = importer.apply(source, path, overwrite=overwrite, rename_imports=rename_imports) if apply else importer.preview(source, path)
     print(asdict(report))
+
+
+def extensions_list(enabled_only: bool = False):
+    print(ExtensionManager().doctor(enabled_only=enabled_only))
+
+
+def extensions_info(name: str):
+    print(asdict(ExtensionManager().status(name)))
+
+
+def extensions_enable(name: str):
+    print(asdict(ExtensionManager().enable(name)))
+
+
+def extensions_disable(name: str):
+    print(asdict(ExtensionManager().disable(name)))
+
+
+def extensions_doctor(enabled_only: bool = False):
+    print(ExtensionManager().doctor(enabled_only=enabled_only))
+
+
+def runs_list():
+    orch = Orchestrator()
+    print(
+        [
+            {
+                "id": item.get("id"),
+                "title": item.get("title"),
+                "status": item.get("status"),
+                "created_at": item.get("created_at"),
+                "updated_at": item.get("updated_at"),
+                "metrics": item.get("metrics", {}),
+            }
+            for item in orch.list_runs()
+        ]
+    )
+
+
+def runs_show(run_id: str):
+    orch = Orchestrator()
+    print(orch.summarize_run(run_id))
+
+
+def runs_resume(run_id: str):
+    orch = Orchestrator()
+    print(orch.continue_run(run_id))
+
+
+def runs_cancel(run_id: str):
+    orch = Orchestrator()
+    print(orch.cancel_run(run_id))
 
 
 def openclaw(prompt: str, config_path: str, policy_pack: str = "safe-default"):
@@ -545,24 +624,15 @@ def _serve_with_channels(args):
 
     from agi_runtime.channels.router import ChannelRouter
     router = ChannelRouter(agent)
-
+    requested_extensions = list(args.extension or [])
     if args.telegram:
-        try:
-            from agi_runtime.channels.telegram import TelegramChannel
-            tg = TelegramChannel(agent)
-            router.register(tg)
-            print("Telegram channel registered")
-        except Exception as e:
-            print(f"Telegram channel failed: {e}")
-
+        requested_extensions.append("telegram")
     if args.discord:
-        try:
-            from agi_runtime.channels.discord import DiscordChannel
-            dc = DiscordChannel(agent)
-            router.register(dc)
-            print("Discord channel registered")
-        except Exception as e:
-            print(f"Discord channel failed: {e}")
+        requested_extensions.append("discord")
+
+    for channel in ExtensionManager().build_channels(agent, requested_extensions=requested_extensions):
+        router.register(channel)
+        print(f"{channel.name} extension registered")
 
     # Start HTTP server in a thread, channels via asyncio
     import threading
@@ -630,11 +700,13 @@ def main():
     serverp.add_argument("--port", type=int, default=8787)
     serverp.add_argument("--telegram", action="store_true", help="also start Telegram bot")
     serverp.add_argument("--discord", action="store_true", help="also start Discord bot")
+    serverp.add_argument("--extension", action="append", default=[], help="enable a named extension (repeatable)")
     serverp.add_argument("--config", default="helloagi.json")
     serverp.add_argument("--policy", default="safe-default")
 
     docp = sub.add_parser("doctor", help="check local runtime state")
     docp.add_argument("--config", default="helloagi.json")
+    docp.add_argument("--onboard", default="helloagi.onboard.json")
 
     healthp = sub.add_parser("health", help="run full local health checks")
     healthp.add_argument("--config", default="helloagi.json")
@@ -655,6 +727,8 @@ def main():
     service_installp.add_argument("--policy", default="safe-default")
     service_installp.add_argument("--telegram", action="store_true")
     service_installp.add_argument("--discord", action="store_true")
+    service_installp.add_argument("--extension", action="append", default=[], help="enable a named extension (repeatable)")
+    service_installp.add_argument("--workdir", default=".", help="working directory for config, .env, and runtime state")
     service_sub.add_parser("start", help="start local background service")
     service_sub.add_parser("stop", help="stop local background service")
     service_sub.add_parser("status", help="show local background service status")
@@ -664,6 +738,30 @@ def main():
     migratep.add_argument("--source", choices=["openclaw", "hermes"], required=True)
     migratep.add_argument("--path", default=None)
     migratep.add_argument("--apply", action="store_true", help="apply the import instead of preview only")
+    migratep.add_argument("--overwrite", action="store_true", help="overwrite existing imported artifacts")
+    migratep.add_argument("--rename-imports", action="store_true", help="rename colliding imports instead of skipping")
+
+    extp = sub.add_parser("extensions", help="manage optional HelloAGI extensions")
+    ext_sub = extp.add_subparsers(dest="extensions_cmd")
+    ext_list = ext_sub.add_parser("list", help="list known extensions")
+    ext_list.add_argument("--enabled-only", action="store_true")
+    ext_info = ext_sub.add_parser("info", help="show extension details")
+    ext_info.add_argument("name")
+    ext_enable = ext_sub.add_parser("enable", help="enable an extension by name")
+    ext_enable.add_argument("name")
+    ext_disable = ext_sub.add_parser("disable", help="disable an extension by name")
+    ext_disable.add_argument("name")
+    ext_sub.add_parser("doctor", help="check extension readiness")
+
+    runsp = sub.add_parser("runs", help="inspect and control orchestrated workflow runs")
+    runs_sub = runsp.add_subparsers(dest="runs_cmd")
+    runs_sub.add_parser("list", help="list workflow runs")
+    runs_showp = runs_sub.add_parser("show", help="show a workflow run")
+    runs_showp.add_argument("run_id")
+    runs_resumep = runs_sub.add_parser("resume", help="resume a workflow run until idle or terminal")
+    runs_resumep.add_argument("run_id")
+    runs_cancelp = runs_sub.add_parser("cancel", help="cancel a workflow run")
+    runs_cancelp.add_argument("run_id")
 
     sub.add_parser("orchestrate-demo", help="run orchestration DAG demo")
     tri = sub.add_parser("tri-loop", help="run planner/executor/verifier loop")
@@ -720,12 +818,12 @@ def main():
     elif args.cmd == "auto":
         auto(args.goal, args.steps, args.config, args.policy)
     elif args.cmd == "serve":
-        if args.telegram or args.discord:
+        if args.telegram or args.discord or args.extension or ExtensionManager().enabled_names(category="channel"):
             _serve_with_channels(args)
         else:
             run_server(args.host, args.port, getattr(args, "config", "helloagi.json"), args.policy)
     elif args.cmd == "doctor":
-        doctor(args.config)
+        doctor(args.config, args.onboard)
     elif args.cmd == "health":
         health(args.config, args.onboard)
     elif args.cmd == "update":
@@ -746,7 +844,31 @@ def main():
         else:
             parser.error("service requires a subcommand: install, start, stop, status, uninstall")
     elif args.cmd == "migrate":
-        migrate(args.source, args.path, args.apply)
+        migrate(args.source, args.path, args.apply, args.overwrite, args.rename_imports)
+    elif args.cmd == "extensions":
+        if args.extensions_cmd == "list":
+            extensions_list(args.enabled_only)
+        elif args.extensions_cmd == "info":
+            extensions_info(args.name)
+        elif args.extensions_cmd == "enable":
+            extensions_enable(args.name)
+        elif args.extensions_cmd == "disable":
+            extensions_disable(args.name)
+        elif args.extensions_cmd == "doctor":
+            extensions_doctor(enabled_only=False)
+        else:
+            parser.error("extensions requires a subcommand: list, info, enable, disable, doctor")
+    elif args.cmd == "runs":
+        if args.runs_cmd == "list":
+            runs_list()
+        elif args.runs_cmd == "show":
+            runs_show(args.run_id)
+        elif args.runs_cmd == "resume":
+            runs_resume(args.run_id)
+        elif args.runs_cmd == "cancel":
+            runs_cancel(args.run_id)
+        else:
+            parser.error("runs requires a subcommand: list, show, resume, cancel")
     elif args.cmd == "orchestrate-demo":
         orchestrate_demo()
     elif args.cmd == "tri-loop":

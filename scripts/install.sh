@@ -140,11 +140,11 @@ build_install_target() {
             printf '%s\n' "$PACKAGE_SPEC"
             ;;
         git)
-            printf '%s\n' "helloagi[rich] @ git+${REPO_HTTPS_URL}@${GIT_REF}"
+            printf '%s\n' "helloagi[rich,telegram] @ git+${REPO_HTTPS_URL}@${GIT_REF}"
             ;;
         local)
             [[ -n "$ROOT" ]] || fail "Local install requested but repository root could not be resolved."
-            printf '%s\n' "$ROOT[rich]"
+            printf '%s\n' "$ROOT[rich,telegram]"
             ;;
         *)
             fail "Unsupported install source '$INSTALL_SOURCE'. Use pypi, git, or local."

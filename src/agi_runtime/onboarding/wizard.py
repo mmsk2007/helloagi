@@ -105,6 +105,7 @@ class ProviderKeys:
 @dataclass
 class ChannelKeys:
     telegram_bot_token: bool = False
+    discord_bot_token: bool = False
 
 
 @dataclass
@@ -154,6 +155,7 @@ def _detect_environment() -> dict:
     env["has_openai_key"] = bool(os.environ.get("OPENAI_API_KEY"))
     env["has_google_key"] = bool(os.environ.get("GOOGLE_API_KEY"))
     env["has_telegram_token"] = bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
+    env["has_discord_token"] = bool(os.environ.get("DISCORD_BOT_TOKEN"))
     env["has_openclaw_home"] = (Path.home() / ".openclaw").exists()
     env["has_hermes_home"] = (Path.home() / ".hermes").exists()
 
@@ -259,6 +261,8 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         _ok("Google API key found in environment")
     if env.get("has_telegram_token"):
         _ok("Telegram bot token found in environment")
+    if env.get("has_discord_token"):
+        _ok("Discord bot token found in environment")
     if env.get("has_rich"):
         _ok("Rich library available (beautiful terminal UI)")
     else:
@@ -343,6 +347,15 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
     else:
         telegram_token = _secret_prompt("TELEGRAM_BOT_TOKEN (optional, for helloagi serve --telegram)")
+
+    discord_token = ""
+    print()
+    print(f"    {DIM}Discord is also optional. Add a bot token if you want a Discord-ready setup.{NC}")
+    if env.get("has_discord_token"):
+        _ok("Discord bot token already set in environment")
+        discord_token = os.environ.get("DISCORD_BOT_TOKEN", "")
+    else:
+        discord_token = _secret_prompt("DISCORD_BOT_TOKEN (optional, for helloagi serve --discord)")
     print()
 
     # Step 5: Self-test & Save
@@ -355,6 +368,8 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         os.environ["ANTHROPIC_API_KEY"] = anthropic_key
     if telegram_token and not os.environ.get("TELEGRAM_BOT_TOKEN"):
         os.environ["TELEGRAM_BOT_TOKEN"] = telegram_token
+    if discord_token and not os.environ.get("DISCORD_BOT_TOKEN"):
+        os.environ["DISCORD_BOT_TOKEN"] = discord_token
 
     test_results = _run_self_test(anthropic_key)
 
@@ -381,6 +396,7 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         "OPENAI_API_KEY": openai_key,
         "GOOGLE_API_KEY": google_key,
         "TELEGRAM_BOT_TOKEN": telegram_token,
+        "DISCORD_BOT_TOKEN": discord_token,
     }
     save_env_values(env_updates)
 
@@ -397,6 +413,7 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         ),
         channels=ChannelKeys(
             telegram_bot_token=bool(telegram_token or env.get("has_telegram_token")),
+            discord_bot_token=bool(discord_token or env.get("has_discord_token")),
         ),
         env_detected=env,
         setup_complete=True,
@@ -439,6 +456,7 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     print(f"    Tools:      {CYAN}{test_results.get('tools', {}).get('count', '?')}{NC} available")
     print(f"    LLM:        {GREEN}connected{NC}" if test_results.get("llm", {}).get("ok") else f"    LLM:        {YELLOW}template mode{NC}")
     print(f"    Telegram:   {GREEN}configured{NC}" if telegram_token or env.get("has_telegram_token") else f"    Telegram:   {DIM}not configured{NC}")
+    print(f"    Discord:    {GREEN}configured{NC}" if discord_token or env.get("has_discord_token") else f"    Discord:    {DIM}not configured{NC}")
     print(f"    SRG:        {GREEN}active{NC} (deterministic governance)")
     print()
 
@@ -457,6 +475,10 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     if telegram_token or env.get("has_telegram_token"):
         print(f"    {CYAN}${NC} {BOLD}helloagi serve --telegram{NC}")
         print(f"      {DIM}Start Telegram chat using your configured bot token{NC}")
+        print()
+    if discord_token or env.get("has_discord_token"):
+        print(f"    {CYAN}${NC} {BOLD}helloagi serve --discord{NC}")
+        print(f"      {DIM}Start Discord chat using your configured bot token{NC}")
         print()
     print(f"    {CYAN}${NC} {BOLD}helloagi dashboard{NC}")
     print(f"      {DIM}Live monitoring dashboard{NC}")
@@ -491,8 +513,10 @@ def status(path: str = "helloagi.onboard.json"):
         status_str = f"{GREEN}set{NC}" if v else f"{DIM}not set{NC}"
         print(f"    {label}: {status_str}")
     telegram_status = f"{GREEN}set{NC}" if channels.get("telegram_bot_token", False) else f"{DIM}not set{NC}"
+    discord_status = f"{GREEN}set{NC}" if channels.get("discord_bot_token", False) else f"{DIM}not set{NC}"
     print(f"  Channels:")
     print(f"    Telegram: {telegram_status}")
+    print(f"    Discord:  {discord_status}")
 
 
 def is_onboarded(path: str = "helloagi.onboard.json") -> bool:

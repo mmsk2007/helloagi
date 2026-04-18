@@ -82,6 +82,9 @@ class Orchestrator:
             raise KeyError(f"Unknown workflow run: {run_id}")
         return workflow
 
+    def get_run(self, run_id: str) -> dict[str, Any]:
+        return self.resume_run(run_id)
+
     def list_runs(self) -> list[dict[str, Any]]:
         state = self.store.load()
         workflows = state.get("workflows", {})
@@ -89,13 +92,56 @@ class Orchestrator:
 
     def run_until_complete(self, graph: WorkflowGraph, title: str = "") -> dict[str, Any]:
         run_id = self.start_run(graph, title=title)
+        return self.continue_run(run_id)
+
+    def continue_run(self, run_id: str) -> dict[str, Any]:
         while True:
             executed = self.run_once(run_id)
             workflow = self.resume_run(run_id)
-            if workflow["status"] in {"completed", "failed", "escalated"}:
+            if workflow["status"] in {"completed", "failed", "escalated", "canceled"}:
                 return workflow
             if not executed:
                 return workflow
+
+    def cancel_run(self, run_id: str) -> dict[str, Any]:
+        state = self.store.load()
+        workflow = state.get("workflows", {}).get(run_id)
+        if not workflow:
+            raise KeyError(f"Unknown workflow run: {run_id}")
+        for node_state in workflow.get("nodes", {}).values():
+            if node_state.get("status") in {"pending", "ready", "running"}:
+                node_state["status"] = "canceled"
+                node_state["finished_at"] = time.time()
+                node_state["last_output"] = "Canceled by operator."
+        workflow["status"] = "canceled"
+        workflow["updated_at"] = time.time()
+        self._append_history(workflow, "task.canceled", {"reason": "operator_requested"})
+        state["workflows"][run_id] = workflow
+        self.store.save(state)
+        return workflow
+
+    def summarize_run(self, run_id: str) -> dict[str, Any]:
+        workflow = self.resume_run(run_id)
+        node_statuses = {
+            node_id: {
+                "status": data.get("status"),
+                "attempts": data.get("attempts"),
+                "title": data.get("title"),
+                "kind": data.get("kind"),
+                "last_output": data.get("last_output", "")[:200],
+            }
+            for node_id, data in workflow.get("nodes", {}).items()
+        }
+        return {
+            "id": workflow["id"],
+            "title": workflow.get("title", ""),
+            "status": workflow.get("status"),
+            "created_at": workflow.get("created_at"),
+            "updated_at": workflow.get("updated_at"),
+            "metrics": workflow.get("metrics", {}),
+            "nodes": node_statuses,
+            "history": workflow.get("history", []),
+        }
 
     def run_once(self, run_id_or_graph, done: set[str] = None) -> list[str]:
         if isinstance(run_id_or_graph, WorkflowGraph):

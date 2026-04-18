@@ -39,6 +39,8 @@ curl -fsSL https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/inst
 ```bash
 helloagi tools
 helloagi health
+helloagi extensions doctor
+helloagi service status
 python -m agi_runtime.cli doctor
 python -m agi_runtime.cli onboard-status
 ```

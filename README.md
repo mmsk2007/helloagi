@@ -77,6 +77,17 @@ That's it. The installer bootstraps HelloAGI, initializes the runtime, and launc
 > *"The starting point of all achievement is desire."*
 > — Napoleon Hill
 
+Docs by goal:
+- Install and setup: [docs/install.md](docs/install.md)
+- CLI and commands: [docs/cli-reference.md](docs/cli-reference.md)
+- Migration: [docs/migration.md](docs/migration.md)
+- Channels and extensions: [docs/channels.md](docs/channels.md)
+- Security: [docs/security.md](docs/security.md)
+- Privacy: [docs/privacy.md](docs/privacy.md)
+- Environment variables: [docs/environment.md](docs/environment.md)
+- Platforms: [docs/platforms.md](docs/platforms.md)
+- Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
+
 ### What Happens During Install + First Run
 
 ```
@@ -121,6 +132,13 @@ helloagi service install --telegram             # Install local background servi
 helloagi service start                          # Start local background service
 helloagi service status                         # Inspect service + health
 helloagi migrate --source openclaw              # Preview import from OpenClaw
+helloagi migrate --source openclaw --apply --rename-imports
+helloagi migrate --source hermes --apply        # Import Hermes secrets + artifacts
+helloagi extensions list                        # Inspect optional extensions
+helloagi extensions doctor                      # Check extension readiness
+helloagi extensions enable telegram             # Persistently enable Telegram extension
+helloagi runs list                              # Inspect orchestration runs
+helloagi runs show <run-id>                     # Inspect a workflow run
 helloagi dashboard                              # Live monitoring dashboard
 helloagi tools                                  # List all 17 tools
 helloagi skills                                 # List learned skills
@@ -216,7 +234,15 @@ cd helloagi
    - `/reminders`
    - `/reminder_cancel <id>` / `/reminder_pause <id>` / `/reminder_resume <id>` / `/reminder_run_now <id>`
 
-**Optional background process:** after `helloagi service install --telegram`, run `helloagi service start` (uses the same `serve --telegram` under the hood; working directory should be the project folder with `.env`).
+**Optional background process:** after `helloagi service install --telegram`, run `helloagi service start`. HelloAGI uses OS-native service backends where possible: Windows Scheduled Task, macOS `launchd`, Linux `systemd --user`.
+
+### Platform, Service, and Secret Model
+
+- Secrets live in environment variables and local `.env`.
+- `helloagi.onboard.json` stores onboarding metadata only, not provider or channel secrets.
+- Channels are optional extensions. Use `helloagi extensions doctor` to check readiness.
+- `helloagi serve` and `helloagi service install` honor persistently enabled channel extensions.
+- Migration imports secrets into `.env`, copies source artifacts into `memory/imports/`, and copies imported skills into `memory/skills/`.
 
 ---
 
@@ -577,7 +603,7 @@ Your tool is automatically discovered, registered, gets SRG governance, and appe
 ```bash
 pip install helloagi[dev]
 PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py"
-# 100 tests, 0 failures
+# 131 tests, 0 failures
 ```
 
 ---

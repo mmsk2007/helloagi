@@ -44,7 +44,7 @@ Then run `helloagi onboard` and all other commands **with this venv activated**.
 curl -fsSL https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/install.sh | bash
 ```
 
-The installer installs `helloagi[rich]`, initializes the runtime, runs a health check, and launches the onboarding wizard immediately.
+The installer installs `helloagi[rich,telegram]`, initializes the runtime, runs a health check, and launches the onboarding wizard immediately.
 
 ### Windows PowerShell
 
@@ -64,6 +64,28 @@ python -m agi_runtime.cli onboard
 ```
 
 This works even before shell PATH refreshes expose the `helloagi` command (after install, `agi_runtime` is importable in that same interpreter).
+
+## Option B2: Tool-style install
+
+```bash
+pipx install helloagi
+# or
+uv tool install helloagi
+```
+
+Then run:
+
+```bash
+helloagi onboard
+helloagi health
+```
+
+For channel extras, install with extras support, for example:
+
+```bash
+pipx install "helloagi[telegram]"
+pipx install "helloagi[discord]"
+```
 
 ## Option C: Install from Source
 
@@ -109,7 +131,7 @@ The container runs the HTTP API server on port 8787 by default.
 
 ---
 
-## Telegram after onboarding
+## Telegram or Discord after onboarding
 
 1. Install the Telegram extra: `pip install "helloagi[rich,telegram]"` (or `pip install -e ".[rich,telegram]"` from a clone).
 2. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token into onboarding or into `.env` as `TELEGRAM_BOT_TOKEN`.
@@ -124,6 +146,12 @@ The container runs the HTTP API server on port 8787 by default.
 
 Optional: `helloagi service install --telegram` then `helloagi service start` to run detached (same working directory so `.env` is found).
 
+For Discord:
+
+1. Install the Discord extra: `pip install "helloagi[discord]"`.
+2. Put `DISCORD_BOT_TOKEN=...` in `.env` or enter it during onboarding.
+3. Start it with `helloagi serve --discord` or `helloagi service install --discord`.
+
 ---
 
 ## Post-Install Setup
@@ -134,7 +162,7 @@ Optional: `helloagi service install --telegram` then `helloagi service start` to
 helloagi onboard
 ```
 
-The interactive wizard configures agent identity, timezone, model tier, provider keys, and optional Telegram bot token. Non-secret onboarding state is saved to `helloagi.onboard.json`; secrets are written to local `.env`.
+The interactive wizard configures agent identity, timezone, model tier, provider keys, and optional Telegram/Discord bot tokens. Non-secret onboarding state is saved to `helloagi.onboard.json`; secrets are written to local `.env`.
 
 ### 2. Initialize runtime config
 
@@ -196,9 +224,19 @@ helloagi service install --telegram
 helloagi service start
 helloagi service status
 
+# Extensions and channels
+helloagi extensions list
+helloagi extensions doctor
+helloagi extensions enable telegram
+
 # Migration preview/apply
 helloagi migrate --source openclaw
+helloagi migrate --source openclaw --apply --rename-imports
 helloagi migrate --source hermes --apply
+
+# Workflow runs
+helloagi runs list
+helloagi runs show <run-id>
 ```
 
 ---
@@ -230,7 +268,9 @@ curl -s http://127.0.0.1:8787/chat \
 | Agent returns template responses | Set `ANTHROPIC_API_KEY` for Claude backbone |
 | Doctor shows missing files | Run `helloagi init` first |
 | Service is installed but not reachable | Run `helloagi service status` then `helloagi health` |
+| Channel will not start | Run `helloagi extensions doctor` and verify missing env or missing extras |
 | Want to import another agent setup | Run `helloagi migrate --source openclaw` or `helloagi migrate --source hermes` |
+| Imported files collide with existing state | Re-run migration with `--rename-imports` or `--overwrite` |
 | Port 8787 in use | Use `--port 8788` or stop the other process |
 | Need to remove the package safely | Run `helloagi uninstall --yes` |
 
