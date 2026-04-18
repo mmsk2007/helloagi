@@ -51,6 +51,8 @@ class TelegramChannel(BaseChannel):
 
     def _principal_id_for_update(self, update) -> str:
         """Build a stable principal id for Telegram chats."""
+        if not update or not update.effective_user or not update.effective_chat:
+            return "telegram:unknown"
         user_id = str(update.effective_user.id)
         chat_id = str(update.effective_chat.id)
         chat_type = getattr(update.effective_chat, "type", "")
@@ -113,6 +115,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("reminder_run_now", self._cmd_reminder_run_now))
         self._app.add_handler(CallbackQueryHandler(self._handle_approval))
         self._app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
+        self._app.add_error_handler(self._on_error)
 
         logger.info("Telegram bot starting...")
         await self._app.initialize()
@@ -295,6 +298,15 @@ class TelegramChannel(BaseChannel):
 
     async def _handle_message(self, update, context):
         """Handle incoming text messages."""
+        if (
+            not update
+            or not update.effective_user
+            or not update.effective_chat
+            or not update.message
+            or not update.message.text
+        ):
+            logger.debug("Telegram: skipping non-user/non-text update")
+            return
         user_id = str(update.effective_user.id)
         chat_id = str(update.effective_chat.id)
         text = update.message.text
@@ -361,6 +373,15 @@ class TelegramChannel(BaseChannel):
     def _think_for_principal(self, principal_id: str, text: str):
         self.agent.set_principal(principal_id)
         return self.agent.think(text)
+
+    async def _on_error(self, update, context):
+        """Global PTB error handler to avoid noisy unhandled exceptions."""
+        logger.exception("Telegram update error", exc_info=context.error)
+        try:
+            if update and getattr(update, "message", None):
+                await update.message.reply_text("❌ Internal error while processing your message.")
+        except Exception:
+            pass
 
     async def _handle_approval(self, update, context):
         """Handle inline keyboard approval callbacks."""
