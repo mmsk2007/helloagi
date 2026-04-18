@@ -1,6 +1,13 @@
 """Recall information from persistent semantic memory."""
 
-from agi_runtime.tools.registry import tool, ToolParam, ToolResult
+import os
+
+from agi_runtime.tools.registry import (
+    tool,
+    ToolParam,
+    ToolResult,
+    get_tool_context_value,
+)
 
 
 @tool(
@@ -18,8 +25,15 @@ def memory_recall(query: str, top_k: int = 5) -> ToolResult:
 
     store = GeminiEmbeddingStore()
 
+    principal_id = get_tool_context_value("principal_id")
+    scope = os.environ.get("HELLOAGI_MEMORY_SCOPE", "compat")
     if store.available and store.count() > 0:
-        results = store.search(query, top_k=top_k)
+        results = store.search(
+            query,
+            top_k=top_k,
+            principal_id=principal_id,
+            scope=scope,
+        )
         if results:
             output_parts = []
             for r in results:
@@ -35,6 +49,12 @@ def memory_recall(query: str, top_k: int = 5) -> ToolResult:
             lines = mem_file.read_text(encoding="utf-8").splitlines()
             query_lower = query.lower()
             matches = [ln for ln in lines if query_lower in ln.lower()]
+            if principal_id:
+                pid_tag = f"[principal:{principal_id}]"
+                if scope.strip().lower() == "strict":
+                    matches = [ln for ln in matches if pid_tag in ln]
+                else:
+                    matches = [ln for ln in matches if (pid_tag in ln or "[principal:" not in ln)]
             if matches:
                 return ToolResult(ok=True, output="\n".join(matches[:top_k]))
         return ToolResult(ok=True, output="No memories stored yet.")

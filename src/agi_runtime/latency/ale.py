@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Dict, Optional
+import hashlib
 import time
+from dataclasses import dataclass, field
+from typing import Dict
 
 
 @dataclass
@@ -19,12 +20,18 @@ class ALEngine:
     cache: Dict[str, PrecomputeEntry] = field(default_factory=dict)
 
     def key_for(self, text: str) -> str:
+        """Cache key must be unique per utterance.
+
+        Previously, almost everything mapped to ``intent:general``, so the first
+        reply was replayed for every later message until TTL expired.
+        """
         t = text.strip().lower()
+        digest = hashlib.sha256(t.encode("utf-8", errors="replace")).hexdigest()[:24]
         if "build" in t and "agent" in t:
-            return "intent:build-agent"
+            return f"intent:build-agent:{digest}"
         if "market" in t or "x " in t or "twitter" in t:
-            return "intent:growth"
-        return "intent:general"
+            return f"intent:growth:{digest}"
+        return f"intent:general:{digest}"
 
     def get(self, text: str) -> str | None:
         k = self.key_for(text)

@@ -30,6 +30,8 @@ def bash_exec(command: str, timeout: int = 30, working_dir: str = None) -> ToolR
             shell=shell,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             cwd=working_dir,
         )

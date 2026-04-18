@@ -577,11 +577,16 @@ def _serve_with_channels(args):
     http_thread.start()
     print(f"HTTP API listening on http://{args.host}:{args.port}")
 
-    # Start channels
+    # Windows default (Proactor) often logs "Event loop is closed" from asyncio
+    # transports when the loop shuts down; Selector avoids it for polling bots.
+    if os.name == "nt":
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     try:
         asyncio.run(router.start_all())
     except KeyboardInterrupt:
         print("\nShutting down...")
+    finally:
         srv.shutdown()
 
 

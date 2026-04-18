@@ -1,6 +1,11 @@
 """Store facts and insights to persistent semantic memory."""
 
-from agi_runtime.tools.registry import tool, ToolParam, ToolResult
+from agi_runtime.tools.registry import (
+    tool,
+    ToolParam,
+    ToolResult,
+    get_tool_context_value,
+)
 
 
 @tool(
@@ -18,8 +23,13 @@ def memory_store(content: str, category: str = "fact") -> ToolResult:
 
     store = GeminiEmbeddingStore()
 
+    principal_id = get_tool_context_value("principal_id")
     if store.available:
-        success = store.add(content, metadata={"category": category})
+        success = store.add(
+            content,
+            metadata={"category": category},
+            principal_id=principal_id,
+        )
         if success:
             return ToolResult(ok=True, output=f"Stored to semantic memory [{category}]: {content[:100]}...")
         return ToolResult(ok=False, output="", error="Failed to generate embedding. Check GOOGLE_API_KEY.")
@@ -28,6 +38,7 @@ def memory_store(content: str, category: str = "fact") -> ToolResult:
         from pathlib import Path
         mem_file = Path("memory/facts.txt")
         mem_file.parent.mkdir(parents=True, exist_ok=True)
+        prefix = f"[principal:{principal_id}] " if principal_id else ""
         with mem_file.open("a", encoding="utf-8") as f:
-            f.write(f"[{category}] {content}\n")
+            f.write(f"{prefix}[{category}] {content}\n")
         return ToolResult(ok=True, output=f"Stored to file memory [{category}]: {content[:100]}...")

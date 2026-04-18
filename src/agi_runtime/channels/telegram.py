@@ -44,6 +44,15 @@ class TelegramChannel(BaseChannel):
         self._app = None
         self._pending_approvals: dict = {}  # message_id -> callback
 
+    def _principal_id_for_update(self, update) -> str:
+        """Build a stable principal id for Telegram chats."""
+        user_id = str(update.effective_user.id)
+        chat_id = str(update.effective_chat.id)
+        chat_type = getattr(update.effective_chat, "type", "")
+        if chat_type == "private":
+            return f"telegram:dm:{user_id}"
+        return f"telegram:group:{chat_id}:user:{user_id}"
+
     async def start(self):
         """Start the Telegram bot."""
         if not self.token:
@@ -66,7 +75,23 @@ class TelegramChannel(BaseChannel):
                 "python-telegram-bot required: pip install python-telegram-bot"
             )
 
-        self._app = Application.builder().token(self.token).build()
+        # getUpdates uses a separate HTTPX pool; default pool size is 1, so the long-poll
+        # holds the only connection and shutdown's final getUpdates hits PoolTimeout.
+        # See: https://github.com/python-telegram-bot/python-telegram-bot/wiki/Frequently-Asked-Questions
+        self._app = (
+            Application.builder()
+            .token(self.token)
+            .get_updates_connection_pool_size(8)
+            .get_updates_pool_timeout(60.0)
+            .get_updates_read_timeout(60.0)
+            .get_updates_write_timeout(60.0)
+            .get_updates_connect_timeout(30.0)
+            .pool_timeout(60.0)
+            .read_timeout(120.0)
+            .write_timeout(60.0)
+            .connect_timeout(30.0)
+            .build()
+        )
 
         # Register handlers
         self._app.add_handler(CommandHandler("start", self._cmd_start))
@@ -98,7 +123,6 @@ class TelegramChannel(BaseChannel):
             await self._app.bot.send_message(
                 chat_id=int(channel_id),
                 text=text,
-                parse_mode="Markdown",
             )
 
     # ── Command Handlers ──────────────────────────────────────
@@ -108,8 +132,8 @@ class TelegramChannel(BaseChannel):
         char = self.agent.identity.state.character
         tools_count = len(self.agent.tool_registry.list_tools())
         await update.message.reply_text(
-            f"🧠 *HelloAGI — {name}*\n"
-            f"_{char}_\n\n"
+            f"🧠 HelloAGI - {name}\n"
+            f"{char}\n\n"
             f"I have {tools_count} tools at my disposal, governed by SRG safety.\n\n"
             f"Commands:\n"
             f"/tools — See my tools\n"
@@ -118,7 +142,6 @@ class TelegramChannel(BaseChannel):
             f"/new — Fresh conversation\n"
             f"/help — Help\n\n"
             f"Just send me a message and I'll get to work!",
-            parse_mode="Markdown",
         )
 
     async def _cmd_tools(self, update, context):
@@ -126,41 +149,41 @@ class TelegramChannel(BaseChannel):
         # Telegram has 4096 char limit
         if len(info) > 4000:
             info = info[:4000] + "\n..."
-        await update.message.reply_text(f"```\n{info}\n```", parse_mode="Markdown")
+        await update.message.reply_text(info)
 
     async def _cmd_skills(self, update, context):
         skills = self.agent.skills.list_skills()
         if skills:
-            lines = [f"• *{s.name}*: {s.description} (used {s.invoke_count}x)" for s in skills]
-            await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
+            lines = [f"- {s.name}: {s.description} (used {s.invoke_count}x)" for s in skills]
+            await update.message.reply_text("\n".join(lines))
         else:
-            await update.message.reply_text("_No skills learned yet._", parse_mode="Markdown")
+            await update.message.reply_text("No skills learned yet.")
 
     async def _cmd_identity(self, update, context):
         state = self.agent.identity.state
         text = (
-            f"*{state.name}*\n"
-            f"_{state.character}_\n\n"
-            f"*Purpose:* {state.purpose}\n\n"
-            f"*Principles:*\n" +
-            "\n".join(f"• {p}" for p in state.principles)
+            f"{state.name}\n"
+            f"{state.character}\n\n"
+            f"Purpose: {state.purpose}\n\n"
+            f"Principles:\n" +
+            "\n".join(f"- {p}" for p in state.principles)
         )
-        await update.message.reply_text(text, parse_mode="Markdown")
+        await update.message.reply_text(text)
 
     async def _cmd_new(self, update, context):
         user_id = str(update.effective_user.id)
         self.clear_session(user_id)
-        self.agent.clear_history()
+        principal_id = self._principal_id_for_update(update)
+        self.agent.clear_history(principal_id=principal_id)
         await update.message.reply_text("🔄 Fresh conversation started.")
 
     async def _cmd_help(self, update, context):
         await update.message.reply_text(
-            "🧠 *HelloAGI Help*\n\n"
+            "🧠 HelloAGI Help\n\n"
             "Send me any message and I'll work on it using my tools.\n\n"
             "I can: run code, read/write files, search the web, analyze code, "
             "and more — all governed by SRG safety.\n\n"
             "If I need to do something risky, I'll ask for your approval.",
-            parse_mode="Markdown",
         )
 
     # ── Message Handler ───────────────────────────────────────
@@ -188,29 +211,51 @@ class TelegramChannel(BaseChannel):
         self.agent.on_user_input = on_user_input
 
         try:
-            # Run agent thinking
-            r = self.agent.think(text)
+            principal_id = self._principal_id_for_update(update)
+            # Run sync think() off the asyncio loop — calling think() directly blocks PTB's
+            # event loop (think() uses future.result() when a loop is already running).
+            r = await asyncio.wait_for(
+                asyncio.to_thread(self._think_for_principal, principal_id, text),
+                timeout=600.0,
+            )
 
-            # Format response
-            gov_icon = {"allow": "🟢", "escalate": "🟡", "deny": "🔴"}.get(r.decision, "⬜")
-            header = f"{gov_icon} `{r.decision}` | risk: {r.risk:.2f}"
-            if r.tool_calls_made > 0:
-                header += f" | {r.tool_calls_made} tools in {r.turns_used} turns"
+            show_gov = os.environ.get("HELLOAGI_TELEGRAM_SHOW_GOV", "0").strip().lower() in (
+                "1", "true", "yes", "on"
+            )
+            meta_line = ""
+            if r.decision != "allow":
+                gov_icon = {"escalate": "🟡", "deny": "🔴"}.get(r.decision, "⬜")
+                meta_line = f"{gov_icon} {r.decision.upper()} | risk: {r.risk:.2f}"
+            elif show_gov:
+                meta_line = f"🟢 ALLOW | risk: {r.risk:.2f}"
+                if r.tool_calls_made > 0:
+                    meta_line += f" | {r.tool_calls_made} tools in {r.turns_used} turns"
 
-            response_text = f"{header}\n\n{r.text}"
+            response_text = r.text if not meta_line else f"{meta_line}\n\n{r.text}"
 
             # Telegram 4096 char limit
             if len(response_text) > 4000:
-                response_text = response_text[:4000] + "\n\n_...truncated_"
+                response_text = response_text[:4000] + "\n\n...truncated"
 
-            await update.message.reply_text(response_text, parse_mode="Markdown")
+            # Agent text includes arbitrary tool names (underscores) and paths; legacy
+            # Markdown breaks on unpaired "_" (e.g. web_fetch). Send as plain text.
+            await update.message.reply_text(response_text)
 
+        except asyncio.TimeoutError:
+            logger.warning("Telegram handler: think() exceeded 600s")
+            await update.message.reply_text(
+                "⏱ That took too long (10 minute limit). Try a shorter question or check server logs."
+            )
         except Exception as e:
             logger.error(f"Error handling message: {e}")
             await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
 
         finally:
             self.agent.on_user_input = original_input
+
+    def _think_for_principal(self, principal_id: str, text: str):
+        self.agent.set_principal(principal_id)
+        return self.agent.think(text)
 
     async def _handle_approval(self, update, context):
         """Handle inline keyboard approval callbacks."""

@@ -34,8 +34,30 @@ class ChannelRouter:
         for name, channel in self._channels.items():
             logger.info(f"Starting channel: {name}")
             tasks.append(asyncio.create_task(channel.start()))
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            if tasks:
+                # Do not use return_exceptions=True — it hides startup failures (e.g. bad
+                # token) and the process exits right after "HTTP API listening" with no trace.
+                await asyncio.gather(*tasks)
+            # PTB v22+: Updater.start_polling() returns once background polling is running
+            # (it no longer blocks). Discord bot.start() still blocks. If every channel's
+            # start() has already returned, we must keep the loop alive until Ctrl+C/cancel.
+            if tasks and all(t.done() for t in tasks):
+                for t in tasks:
+                    if t.cancelled():
+                        raise asyncio.CancelledError()
+                    exc = t.exception()
+                    if exc is not None:
+                        raise exc
+                _run_forever = asyncio.Event()
+                logger.info("Channels started; waiting (Ctrl+C to stop).")
+                await _run_forever.wait()
+        except asyncio.CancelledError:
+            raise
+        finally:
+            # Stops Telegram/Discord before the loop closes — avoids Windows
+            # Proactor "Event loop is closed" noise during transport __del__.
+            await self.stop_all()
 
     async def stop_all(self):
         """Stop all channels gracefully."""

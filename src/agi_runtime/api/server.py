@@ -185,6 +185,12 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
         msg = data.get("message", "")
         if not msg:
             return self._send_json(400, {"error": "missing 'message' field"})
+        principal_id = str(
+            data.get("principal_id")
+            or data.get("session_id")
+            or f"api:{self.client_address[0]}"
+        )
+        self.agent.set_principal(principal_id)
 
         start = time.time()
         r = self.agent.think(msg)
@@ -205,6 +211,12 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
         msg = data.get("message", "")
         if not msg:
             return self._send_json(400, {"error": "missing 'message' field"})
+        principal_id = str(
+            data.get("principal_id")
+            or data.get("session_id")
+            or f"api:{self.client_address[0]}"
+        )
+        self.agent.set_principal(principal_id)
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

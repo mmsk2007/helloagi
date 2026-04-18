@@ -15,6 +15,7 @@ This is the beating heart of HelloAGI. It combines:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import os
 import time
@@ -24,8 +25,15 @@ from typing import Any, Callable, Dict, List, Optional
 from agi_runtime.governance.srg import SRGGovernor, GovernanceResult
 from agi_runtime.latency.ale import ALEngine
 from agi_runtime.memory.identity import IdentityEngine
+from agi_runtime.memory.principals import PrincipalProfileStore
 from agi_runtime.config.settings import RuntimeSettings
-from agi_runtime.tools.registry import ToolRegistry, ToolResult, discover_builtin_tools
+from agi_runtime.tools.registry import (
+    ToolRegistry,
+    ToolResult,
+    discover_builtin_tools,
+    set_tool_context,
+    reset_tool_context,
+)
 from agi_runtime.observability.journal import Journal
 from agi_runtime.skills.manager import SkillManager
 from agi_runtime.memory.compressor import ContextCompressor
@@ -83,6 +91,7 @@ class HelloAGIAgent:
             style=self.settings.style,
             domain_focus=self.settings.domain_focus,
         )
+        self.principals = PrincipalProfileStore()
         self.journal = Journal(self.settings.journal_path)
         self.skills = SkillManager()
         self.compressor = ContextCompressor()
@@ -101,22 +110,85 @@ class HelloAGIAgent:
         # Semantic memory store (lazy-loaded)
         self._embedding_store = None
 
-        # Conversation history for multi-turn context
-        self._history: List[dict] = []
+        # Conversation state is per principal (chat/user), not process-global.
+        self._principal_ctx: contextvars.ContextVar[str] = contextvars.ContextVar(
+            "helloagi_principal_id",
+            default="local:default",
+        )
+        self._histories: Dict[str, List[dict]] = {}
+        self._session_tool_calls_by_principal: Dict[str, List[dict]] = {}
 
-        # Track tool calls in current session for skill crystallization
-        self._session_tool_calls: List[dict] = []
-
-        # Wire Claude API backbone
+        # LLM backbones (Anthropic + optional Gemini) and active provider
         self._claude = None
-        if _ANTHROPIC_AVAILABLE and os.environ.get("ANTHROPIC_API_KEY"):
-            self._claude = _anthropic_lib.Anthropic()
+        self._gemini_client = None
+        self._llm_provider: Optional[str] = None  # "anthropic" | "google" | None
+        self._configure_llm_backbone()
 
         # Callbacks (set by CLI/API layer)
         self.on_user_input: Optional[Callable] = None
         self.on_stream: Optional[Callable] = None
         self.on_tool_start: Optional[Callable] = None
         self.on_tool_end: Optional[Callable] = None
+
+    def set_principal(self, principal_id: str) -> None:
+        """Set active conversation principal for this execution context."""
+        pid = (principal_id or "local:default").strip() or "local:default"
+        self._principal_ctx.set(pid)
+
+    def current_principal(self) -> str:
+        """Return the active conversation principal id."""
+        return self._principal_ctx.get()
+
+    @property
+    def _history(self) -> List[dict]:
+        pid = self.current_principal()
+        return self._histories.setdefault(pid, [])
+
+    @_history.setter
+    def _history(self, value: List[dict]) -> None:
+        self._histories[self.current_principal()] = value
+
+    @property
+    def _session_tool_calls(self) -> List[dict]:
+        pid = self.current_principal()
+        return self._session_tool_calls_by_principal.setdefault(pid, [])
+
+    @_session_tool_calls.setter
+    def _session_tool_calls(self, value: List[dict]) -> None:
+        self._session_tool_calls_by_principal[self.current_principal()] = value
+
+    def _configure_llm_backbone(self) -> None:
+        """Pick Anthropic vs Google from HELLOAGI_LLM_PROVIDER / settings.llm_provider and available keys."""
+        env_override = os.environ.get("HELLOAGI_LLM_PROVIDER")
+        pref = (env_override or getattr(self.settings, "llm_provider", None) or "auto")
+        pref = str(pref).strip().lower()
+        if pref not in ("auto", "anthropic", "google"):
+            pref = "auto"
+
+        has_anthropic = _ANTHROPIC_AVAILABLE and bool(os.environ.get("ANTHROPIC_API_KEY"))
+        has_google_key = bool(os.environ.get("GOOGLE_API_KEY"))
+        has_genai = False
+        if has_google_key:
+            import importlib.util
+            has_genai = importlib.util.find_spec("google.genai") is not None
+
+        if has_anthropic:
+            self._claude = _anthropic_lib.Anthropic()
+        if has_google_key and has_genai:
+            from google import genai
+            self._gemini_client = genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
+
+        if pref == "anthropic":
+            self._llm_provider = "anthropic" if has_anthropic else None
+        elif pref == "google":
+            self._llm_provider = "google" if (has_google_key and has_genai) else None
+        else:
+            if has_anthropic:
+                self._llm_provider = "anthropic"
+            elif has_google_key and has_genai:
+                self._llm_provider = "google"
+            else:
+                self._llm_provider = None
 
     @property
     def embedding_store(self):
@@ -131,7 +203,11 @@ class HelloAGIAgent:
 
     # ── System Prompt Builder ──────────────────────────────────
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(
+        self,
+        bootstrap_instruction: Optional[str] = None,
+        profile_excerpt: Optional[str] = None,
+    ) -> str:
         """Build the system prompt from identity, memory, skills, and context."""
         identity = self.identity.state
         parts = [
@@ -141,7 +217,7 @@ class HelloAGIAgent:
             f"Style: {self.settings.style}.",
             f"Domain focus: {self.settings.domain_focus}.",
             "",
-            "You are a world-class autonomous agent powered by HelloAGI — the first AGI runtime with deterministic governance.",
+            "You are a world-class autonomous agent powered by HelloAGI — an open governed-autonomy runtime.",
             "You have tools to interact with the real world: execute commands, read/write files, search the web, run code, and more.",
             "You MUST use tools to accomplish tasks — don't just describe what to do, actually DO it.",
             "",
@@ -158,6 +234,12 @@ class HelloAGIAgent:
             "After completing a complex multi-step task successfully, consider using skill_create",
             "to save the workflow as a reusable skill for future similar requests.",
             "Before starting a task, check if skill_invoke can help with an existing skill.",
+            "",
+            "Conversational norms:",
+            "- Sound natural and human; avoid robotic section headers in normal chat.",
+            "- For simple social messages, reply without unnecessary tool use.",
+            "- Use tools when they materially improve outcome quality or correctness.",
+            "- Keep responses concise unless the user asks for depth.",
         ]
 
         # Inject personality and growth awareness
@@ -204,6 +286,18 @@ class HelloAGIAgent:
             parts.append(memory_context)
             parts.append("</memory-context>")
 
+        if profile_excerpt:
+            parts.append("")
+            parts.append("<principal-profile>")
+            parts.append(profile_excerpt)
+            parts.append("</principal-profile>")
+
+        if bootstrap_instruction:
+            parts.append("")
+            parts.append("<bootstrap-guidance>")
+            parts.append(bootstrap_instruction)
+            parts.append("</bootstrap-guidance>")
+
         return "\n".join(parts)
 
     def _allowed_tool(self, tool_name: str) -> bool:
@@ -235,6 +329,8 @@ class HelloAGIAgent:
         if not store or not store.available or store.count() == 0:
             # Fallback: check text-based memory file
             return self._get_file_memory_context()
+        principal_id = self.current_principal()
+        memory_scope = os.environ.get("HELLOAGI_MEMORY_SCOPE", "compat")
 
         try:
             # Build query from recent conversation
@@ -245,7 +341,12 @@ class HelloAGIAgent:
             if not recent_text.strip():
                 return None
 
-            results = store.search(recent_text, top_k=5)
+            results = store.search(
+                recent_text,
+                top_k=5,
+                principal_id=principal_id,
+                scope=memory_scope,
+            )
             if results:
                 entries = []
                 for r in results:
@@ -266,6 +367,16 @@ class HelloAGIAgent:
             try:
                 lines = mem_file.read_text(encoding="utf-8").splitlines()
                 if lines:
+                    principal_id = self.current_principal()
+                    scope = os.environ.get("HELLOAGI_MEMORY_SCOPE", "compat").strip().lower()
+                    if principal_id:
+                        tag = f"[principal:{principal_id}]"
+                        if scope == "strict":
+                            lines = [ln for ln in lines if tag in ln]
+                        else:
+                            lines = [ln for ln in lines if (tag in ln or "[principal:" not in ln)]
+                    if not lines:
+                        return None
                     # Return last 10 memories
                     return "\n".join(f"- {l}" for l in lines[-10:])
             except Exception:
@@ -281,12 +392,17 @@ class HelloAGIAgent:
             return
 
         store = self.embedding_store
+        principal_id = self.current_principal()
         if store and store.available:
             # Store user preferences and key facts
             try:
                 # Store the core interaction as a memory
                 summary = f"User asked: {user_input[:200]}. Agent responded about: {response_text[:200]}"
-                store.add(summary, metadata={"category": "interaction", "ts": time.time()})
+                store.add(
+                    summary,
+                    metadata={"category": "interaction", "ts": time.time()},
+                    principal_id=principal_id,
+                )
             except Exception:
                 pass
         else:
@@ -296,7 +412,11 @@ class HelloAGIAgent:
             mem_file.parent.mkdir(parents=True, exist_ok=True)
             try:
                 with mem_file.open("a", encoding="utf-8") as f:
-                    f.write(f"[interaction] User: {user_input[:100]} | Response: {response_text[:100]}\n")
+                    prefix = f"[principal:{principal_id}] " if principal_id else ""
+                    f.write(
+                        f"{prefix}[interaction] User: {user_input[:100]} | "
+                        f"Response: {response_text[:100]}\n"
+                    )
             except Exception:
                 pass
 
@@ -382,7 +502,7 @@ class HelloAGIAgent:
                     })
                     continue
 
-                result = await self.tool_registry.execute(tc.name, tc.input)
+                result = await self._execute_tool(tc.name, tc.input)
                 if result.ok:
                     self.circuit_breaker.record_success(tc.name)
                 else:
@@ -413,13 +533,18 @@ class HelloAGIAgent:
 
         if loop and loop.is_running():
             import concurrent.futures
+            ctx = contextvars.copy_context()
             with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(asyncio.run, self._think_async(user_input))
+                future = pool.submit(ctx.run, asyncio.run, self._think_async(user_input))
                 return future.result()
         return asyncio.run(self._think_async(user_input))
 
     async def _think_async(self, user_input: str) -> AgentResponse:
         """The full agentic loop — the beating heart of HelloAGI."""
+        principal_id = self.current_principal()
+        self.principals.record_user_message(principal_id, user_input)
+        bootstrap_instruction = self.principals.bootstrap_instruction(principal_id)
+        profile_excerpt = self.principals.profile_excerpt(principal_id)
 
         # 0. Track growth & detect mood
         self.growth.record_session()
@@ -428,7 +553,7 @@ class HelloAGIAgent:
 
         # 1. Evolve identity based on observation
         self.identity.evolve(user_input)
-        self.journal.write("input", {"text": user_input})
+        self.journal.write("input", {"text": user_input, "principal_id": principal_id})
 
         # 2. SRG governance gate on user input
         gov = self.governor.evaluate(user_input)
@@ -443,24 +568,34 @@ class HelloAGIAgent:
             self.journal.write("cache_hit", {"text": cached[:200]})
             return AgentResponse(text=cached, decision=gov.decision, risk=gov.risk)
 
-        # 4. If no Claude API, fall back to template response
-        if not self._claude:
+        # 4. No usable LLM backbone (see HELLOAGI_LLM_PROVIDER + API keys)
+        if self._llm_provider is None:
             text = self._template_response(user_input, gov)
             return AgentResponse(text=text, decision=gov.decision, risk=gov.risk)
 
-        # 5. THE AGENTIC LOOP — real AGI behavior
+        # 5. Agentic loop (Claude or Gemini)
         self._history.append({"role": "user", "content": user_input})
         self._session_tool_calls = []
         tools = self._get_tool_schemas()
-        system_prompt = self._build_system_prompt()
+        system_prompt = self._build_system_prompt(
+            bootstrap_instruction=bootstrap_instruction,
+            profile_excerpt=profile_excerpt,
+        )
 
+        if self._llm_provider == "anthropic":
+            return await self._think_async_claude(user_input, gov, tools, system_prompt)
+        return await self._think_async_gemini(user_input, gov, tools, system_prompt)
+
+    async def _think_async_claude(
+        self, user_input: str, gov: GovernanceResult, tools: List[dict], system_prompt: str
+    ) -> AgentResponse:
+        """Anthropic Messages API tool loop."""
         total_tool_calls = 0
         turns_used = 0
 
         for turn in range(self.max_turns):
             turns_used = turn + 1
 
-            # Call Claude with tools
             try:
                 response = self._claude.messages.create(
                     model=self._select_model(user_input),
@@ -477,7 +612,6 @@ class HelloAGIAgent:
                     tool_calls_made=total_tool_calls, turns_used=turns_used,
                 )
 
-            # Process response content blocks
             text_parts = []
             tool_calls = []
 
@@ -493,23 +627,16 @@ class HelloAGIAgent:
                 elif block.type == "thinking":
                     self.journal.write("thinking", {"text": getattr(block, 'thinking', '')[:500]})
 
-            # Add assistant message to history
             self._history.append({"role": "assistant", "content": response.content})
 
-            # If no tool calls, we're done — return the text response
             if not tool_calls:
                 final_text = "\n".join(text_parts)
 
                 if gov.decision == "escalate":
                     final_text += "\n\n⚠️ This request was flagged for human confirmation before high-risk actions."
 
-                # Cache the response
                 self.ale.put(user_input, final_text)
-
-                # Auto-store to memory
                 self._auto_store_memory(user_input, final_text)
-
-                # Record behavioral patterns
                 tools_used = [tc["tool"] for tc in self._session_tool_calls]
                 self.patterns.record_interaction(user_input, tools_used)
 
@@ -520,7 +647,6 @@ class HelloAGIAgent:
                     "tool_calls": total_tool_calls,
                 })
 
-                # Evolve identity based on successful interaction
                 self.identity.evolve(final_text)
 
                 return AgentResponse(
@@ -531,7 +657,6 @@ class HelloAGIAgent:
                     turns_used=turns_used,
                 )
 
-            # Execute tool calls — SRG GATE ON EVERY CALL
             tool_results = []
             for tc in tool_calls:
                 total_tool_calls += 1
@@ -552,7 +677,6 @@ class HelloAGIAgent:
                         self.on_tool_end(tc.name, False, result_content)
                     continue
 
-                # Special handling: delegate_task spawns a real sub-agent
                 if tc.name == "delegate_task" and self._claude:
                     delegation_result = await self._handle_delegation(
                         goal=tc.input.get("goal", ""),
@@ -572,11 +696,9 @@ class HelloAGIAgent:
                         self.on_tool_end(tc.name, True, delegation_result[:200])
                     continue
 
-                # Get tool definition for risk level
                 tool_def = self.tool_registry.get(tc.name)
                 tool_risk = tool_def.risk.value if tool_def else "medium"
 
-                # SRG GOVERNANCE ON EVERY TOOL CALL
                 tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
 
                 if self.on_tool_start:
@@ -612,7 +734,6 @@ class HelloAGIAgent:
                             self.on_tool_end(tc.name, False, result_content)
                         continue
 
-                # Circuit breaker check — skip tools that are failing repeatedly
                 if not self.circuit_breaker.can_execute(tc.name):
                     cb_status = self.circuit_breaker.get_status(tc.name)
                     result_content = (
@@ -634,10 +755,8 @@ class HelloAGIAgent:
                         self.on_tool_end(tc.name, False, result_content)
                     continue
 
-                # Execute the tool
-                result = await self.tool_registry.execute(tc.name, tc.input)
+                result = await self._execute_tool(tc.name, tc.input)
 
-                # Record success/failure in circuit breaker + supervisor
                 if result.ok:
                     self.circuit_breaker.record_success(tc.name)
                     self.supervisor.record_tool_success(tc.name)
@@ -669,15 +788,306 @@ class HelloAGIAgent:
                 if self.on_tool_end:
                     self.on_tool_end(tc.name, result.ok, result.to_content()[:200])
 
-            # Add tool results to history
             self._history.append({"role": "user", "content": tool_results})
 
-            # Context compression if needed
             if self.compressor.needs_compression(self._history):
                 self._history = await self.compressor.compress(self._history)
                 self.journal.write("context_compressed", {"new_length": len(self._history)})
 
-        # Reached max turns
+        final_text = (
+            f"I've used all {self.max_turns} turns working on your request. "
+            f"Made {total_tool_calls} tool calls across {turns_used} turns."
+        )
+        self.journal.write("max_turns_reached", {"tool_calls": total_tool_calls, "max_turns": self.max_turns})
+        return AgentResponse(
+            text=final_text, decision=gov.decision, risk=gov.risk,
+            tool_calls_made=total_tool_calls, turns_used=turns_used,
+        )
+
+    async def _gemini_generate_with_resilience(
+        self,
+        *,
+        model_id: str,
+        contents: List[Any],
+        config: Any,
+        turn: int,
+    ) -> tuple[Any, str]:
+        """Call Gemini generate_content with exponential backoff on overload, then stable fallback."""
+        from agi_runtime.models.gemini_router import GEMINI_FALLBACK_STABLE
+
+        backoff_delays = [0.0, 1.5, 3.0, 6.0, 12.0]
+
+        def classify(exc: BaseException) -> str:
+            s = str(exc).lower()
+            code = str(exc)
+            if "404" in code or "not found" in s or "no longer available" in s:
+                return "not_found"
+            if (
+                "503" in code
+                or "unavailable" in s
+                or "429" in code
+                or "resource_exhausted" in s
+                or "resource exhausted" in s
+                or ("too many" in s and "request" in s)
+                or "overloaded" in s
+                or "high demand" in s
+                or "try again later" in s
+            ):
+                return "overload"
+            return "other"
+
+        last_exc: Optional[BaseException] = None
+        models = [model_id]
+        if model_id != GEMINI_FALLBACK_STABLE:
+            models.append(GEMINI_FALLBACK_STABLE)
+
+        for mid in models:
+            for attempt, delay in enumerate(backoff_delays):
+                if delay:
+                    await asyncio.sleep(delay)
+                try:
+                    resp = self._gemini_client.models.generate_content(
+                        model=mid,
+                        contents=contents,
+                        config=config,
+                    )
+                    return resp, mid
+                except Exception as e:
+                    last_exc = e
+                    kind = classify(e)
+                    self.journal.write(
+                        "gemini_generate_attempt",
+                        {"model": mid, "attempt": attempt, "kind": kind, "turn": turn},
+                    )
+                    if kind == "other":
+                        raise
+                    if kind == "not_found":
+                        break
+                    if attempt == len(backoff_delays) - 1:
+                        break
+
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("Gemini generate_content failed")
+
+    async def _think_async_gemini(
+        self, user_input: str, gov: GovernanceResult, tools: List[dict], system_prompt: str
+    ) -> AgentResponse:
+        """Google Gemini generate_content tool loop (manual function calling)."""
+        from google.genai import types as gtypes
+        from agi_runtime.llm.gemini_adapter import (
+            build_generate_config,
+            claude_tools_to_gemini_tool,
+            extract_model_content,
+            function_call_args_as_dict,
+            genai_types_available,
+            response_text_and_calls,
+        )
+        from agi_runtime.models.gemini_router import route_gemini_model
+
+        if not genai_types_available() or not self._gemini_client:
+            text = self._template_response(user_input, gov)
+            return AgentResponse(text=text, decision=gov.decision, risk=gov.risk)
+
+        gemini_tool = claude_tools_to_gemini_tool(tools)
+        model_id = route_gemini_model(user_input).model
+        config = build_generate_config(
+            system_instruction=system_prompt,
+            gemini_tool=gemini_tool,
+            max_output_tokens=min(self.MAX_OUTPUT_TOKENS, 8192),
+        )
+
+        contents: List[Any] = [
+            gtypes.Content(role="user", parts=[gtypes.Part.from_text(text=user_input)]),
+        ]
+
+        total_tool_calls = 0
+        turns_used = 0
+
+        for turn in range(self.max_turns):
+            turns_used = turn + 1
+            try:
+                response, model_id = await self._gemini_generate_with_resilience(
+                    model_id=model_id,
+                    contents=contents,
+                    config=config,
+                    turn=turn,
+                )
+            except Exception as e:
+                self.journal.write("llm_error", {"error": str(e), "turn": turn, "provider": "google"})
+                return AgentResponse(
+                    text=f"Gemini LLM call failed: {e}",
+                    decision=gov.decision,
+                    risk=gov.risk,
+                    tool_calls_made=total_tool_calls,
+                    turns_used=turns_used,
+                )
+
+            try:
+                model_content = extract_model_content(response)
+            except Exception as e:
+                return AgentResponse(
+                    text=f"Gemini returned an empty response: {e}",
+                    decision=gov.decision,
+                    risk=gov.risk,
+                    tool_calls_made=total_tool_calls,
+                    turns_used=turns_used,
+                )
+
+            contents.append(model_content)
+            plain_text, raw_calls = response_text_and_calls(response)
+
+            tool_calls: List[ToolCall] = []
+            for idx, fc in enumerate(raw_calls):
+                name = getattr(fc, "name", None) or ""
+                if not name:
+                    continue
+                args = function_call_args_as_dict(fc)
+                tid = f"gemini_{turn}_{idx}_{name}"
+                tool_calls.append(ToolCall(id=tid, name=name, input=args))
+
+            self._history.append({
+                "role": "assistant",
+                "content": plain_text or ("[tool_calls] " + ", ".join(tc.name for tc in tool_calls)),
+            })
+
+            if not tool_calls:
+                final_text = plain_text or ""
+                if gov.decision == "escalate":
+                    final_text += "\n\n⚠️ This request was flagged for human confirmation before high-risk actions."
+                self.ale.put(user_input, final_text)
+                self._auto_store_memory(user_input, final_text)
+                tools_used = [tc["tool"] for tc in self._session_tool_calls]
+                self.patterns.record_interaction(user_input, tools_used)
+                self.journal.write("response", {
+                    "decision": gov.decision,
+                    "risk": gov.risk,
+                    "turns": turns_used,
+                    "tool_calls": total_tool_calls,
+                    "provider": "google",
+                })
+                self.identity.evolve(final_text)
+                return AgentResponse(
+                    text=final_text,
+                    decision=gov.decision,
+                    risk=gov.risk,
+                    tool_calls_made=total_tool_calls,
+                    turns_used=turns_used,
+                )
+
+            tool_results = []
+            func_response_parts = []
+            for tc in tool_calls:
+                total_tool_calls += 1
+                self.growth.record_tool_call()
+
+                if not self._allowed_tool(tc.name):
+                    result_content = f"Tool '{tc.name}' is not available under the active policy pack '{self.policy_pack.name}'."
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": result_content,
+                    })
+                    func_response_parts.append(
+                        gtypes.Part.from_function_response(name=tc.name, response={"result": result_content})
+                    )
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
+                if tc.name == "delegate_task":
+                    msg = (
+                        "delegate_task is only supported with the Anthropic backbone. "
+                        "Set ANTHROPIC_API_KEY and HELLOAGI_LLM_PROVIDER=anthropic, or complete the task without delegating."
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": msg,
+                    })
+                    func_response_parts.append(
+                        gtypes.Part.from_function_response(name=tc.name, response={"result": msg})
+                    )
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, msg)
+                    continue
+
+                tool_def = self.tool_registry.get(tc.name)
+                tool_risk = tool_def.risk.value if tool_def else "medium"
+                tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
+
+                if self.on_tool_start:
+                    self.on_tool_start(tc.name, tc.input, tool_gov.decision)
+
+                if tool_gov.decision == "deny":
+                    result_content = f"🛑 BLOCKED by SRG governance: {'; '.join(tool_gov.reasons)}\n{tool_gov.safe_alternative or ''}"
+                    self.journal.write("tool_denied", {"tool": tc.name, "risk": tool_gov.risk, "reasons": tool_gov.reasons})
+                    tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": result_content})
+                    func_response_parts.append(
+                        gtypes.Part.from_function_response(name=tc.name, response={"result": result_content})
+                    )
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
+                if tool_gov.decision == "escalate":
+                    approved = await self._request_user_approval(tc, tool_gov)
+                    if not approved:
+                        result_content = "User denied this action."
+                        self.journal.write("tool_user_denied", {"tool": tc.name})
+                        tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": result_content})
+                        func_response_parts.append(
+                            gtypes.Part.from_function_response(name=tc.name, response={"result": result_content})
+                        )
+                        if self.on_tool_end:
+                            self.on_tool_end(tc.name, False, result_content)
+                        continue
+
+                if not self.circuit_breaker.can_execute(tc.name):
+                    cb_status = self.circuit_breaker.get_status(tc.name)
+                    result_content = (
+                        f"⚡ Circuit breaker OPEN for '{tc.name}' — "
+                        f"{cb_status['failures']} consecutive failures. "
+                        f"Will retry after cooldown."
+                    )
+                    tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": result_content})
+                    func_response_parts.append(
+                        gtypes.Part.from_function_response(name=tc.name, response={"result": result_content})
+                    )
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
+                result = await self._execute_tool(tc.name, tc.input)
+                if result.ok:
+                    self.circuit_breaker.record_success(tc.name)
+                    self.supervisor.record_tool_success(tc.name)
+                else:
+                    self.circuit_breaker.record_failure(tc.name)
+                    self.supervisor.record_tool_failure(tc.name, result.to_content()[:200])
+
+                self.journal.write("tool_exec", {
+                    "tool": tc.name,
+                    "input": {k: str(v)[:200] for k, v in tc.input.items()},
+                    "ok": result.ok,
+                    "output_preview": result.to_content()[:300],
+                    "governance": tool_gov.decision,
+                    "risk": tool_gov.risk,
+                })
+                self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": result.ok})
+                out = result.to_content()
+                tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": out})
+                func_response_parts.append(gtypes.Part.from_function_response(name=tc.name, response={"result": out}))
+                if self.on_tool_end:
+                    self.on_tool_end(tc.name, result.ok, result.to_content()[:200])
+
+            self._history.append({"role": "user", "content": tool_results})
+            contents.append(gtypes.Content(role="tool", parts=func_response_parts))
+
+            if self.compressor.needs_compression(self._history):
+                self._history = await self.compressor.compress(self._history)
+                self.journal.write("context_compressed", {"new_length": len(self._history)})
+
         final_text = (
             f"I've used all {self.max_turns} turns working on your request. "
             f"Made {total_tool_calls} tool calls across {turns_used} turns."
@@ -689,6 +1099,14 @@ class HelloAGIAgent:
         )
 
     # ── Helpers ────────────────────────────────────────────────
+
+    async def _execute_tool(self, tool_name: str, tool_input: dict) -> ToolResult:
+        """Execute a tool with principal-aware context for memory scoping."""
+        token = set_tool_context(principal_id=self.current_principal())
+        try:
+            return await self.tool_registry.execute(tool_name, tool_input)
+        finally:
+            reset_tool_context(token)
 
     async def _request_user_approval(self, tool_call: ToolCall, gov: GovernanceResult) -> bool:
         """Request user approval for an escalated tool call."""
@@ -724,24 +1142,36 @@ class HelloAGIAgent:
         ]
 
     def _template_response(self, user_input: str, gov: GovernanceResult) -> str:
-        """Fallback response when Claude API is not available."""
+        """Fallback when no LLM backbone is active (keys + optional google-genai)."""
         allowed_tools = self._list_allowed_tools()
         tools_list = ", ".join(t.name for t in allowed_tools)
+        has_google = bool(os.environ.get("GOOGLE_API_KEY"))
         text = (
             f"[{self.identity.state.name} | {self.identity.state.character}]\n"
-            f"I received your request but my LLM backbone is not configured.\n"
-            f"To enable full AGI capabilities, set ANTHROPIC_API_KEY in your environment.\n\n"
-            f"Without the LLM, I can still run tools directly.\n"
+            f"I received your request but no LLM backbone is active.\n"
+            f"- Set ANTHROPIC_API_KEY for Claude (default when present), or\n"
+            f"- Set GOOGLE_API_KEY and run `pip install google-genai` to use Gemini "
+            f"(use HELLOAGI_LLM_PROVIDER=google when both keys exist).\n\n"
+            f"Current: GOOGLE_API_KEY={'set' if has_google else 'unset'}, "
+            f"ANTHROPIC_API_KEY={'set' if os.environ.get('ANTHROPIC_API_KEY') else 'unset'}.\n\n"
+            f"Without an LLM, tool execution is still available.\n"
             f"Available tools ({len(allowed_tools)}): {tools_list}\n"
         )
         if gov.decision == "escalate":
             text += "\n⚠️ This request was flagged for human confirmation."
         return text
 
-    def clear_history(self):
-        """Clear conversation history for a fresh session."""
-        self._history = []
-        self._session_tool_calls = []
+    def clear_history(self, principal_id: Optional[str] = None):
+        """Clear conversation history for one principal or all principals."""
+        if principal_id is None:
+            self._history = []
+            self._session_tool_calls = []
+            return
+        pid = (principal_id or "").strip()
+        if not pid:
+            return
+        self._histories.pop(pid, None)
+        self._session_tool_calls_by_principal.pop(pid, None)
 
     def get_tools_info(self) -> str:
         """Get a formatted list of available tools."""

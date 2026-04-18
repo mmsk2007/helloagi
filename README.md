@@ -1,8 +1,8 @@
 <p align="center">
   <h1 align="center">HelloAGI</h1>
   <p align="center">
-    <strong>The world's first open-source AGI runtime.</strong><br>
-    <em>Not another chatbot wrapper. A complete autonomous intelligence that thinks, acts, learns, and grows — governed by deterministic safety that no prompt can bypass.</em>
+    <strong>An open-source governed autonomy runtime.</strong><br>
+    <em>Not another chatbot wrapper. A practical agent runtime that can think, act, learn, and grow — with deterministic safety gates that prompt injection cannot bypass.</em>
   </p>
 </p>
 
@@ -72,7 +72,7 @@ On Windows PowerShell:
 irm https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/install.ps1 | iex
 ```
 
-That's it. The installer bootstraps HelloAGI, initializes the runtime, and launches the onboarding wizard immediately so users land in a ready-to-go AGI session without fighting PATH issues.
+That's it. The installer bootstraps HelloAGI, initializes the runtime, and launches the onboarding wizard immediately so users land in a ready-to-go AGI session without fighting PATH issues. If `pip` fails inside **Anaconda/Miniconda `base`** (for example `WinError 183` or broken `~package` folders in `site-packages`), use a **virtual environment** instead — see **Manual install** below.
 
 > *"The starting point of all achievement is desire."*
 > — Napoleon Hill
@@ -128,18 +128,88 @@ helloagi update                                 # Upgrade in-place via pip
 helloagi uninstall --yes                        # Remove installed package
 ```
 
-### Other Install Paths
+### Manual install (use this if the one-liner or `pip install -e` fails)
+
+**Use a virtual environment** so HelloAGI does not fight a broken or crowded **conda base** (common on Windows: `WinError 183`, missing `.dist-info`, or half-removed packages named like `~atplotlib`).
+
+**Windows (PowerShell) — from a clone:**
+
+```powershell
+cd helloagi
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+pip install -e ".[rich,telegram]"
+```
+
+If activation is blocked by execution policy, run once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+**macOS / Linux — from a clone:**
 
 ```bash
-pip install --user "helloagi[rich,telegram]"    # Fast PyPI install
-python -m agi_runtime.cli onboard               # Launch onboarding even before PATH refresh
+cd helloagi
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+pip install -e ".[rich,telegram]"
 ```
+
+**PyPI (no clone):** after activating any venv:
+
+```bash
+pip install "helloagi[rich,telegram]"
+```
+
+**Run the CLI without relying on PATH:** the `agi_runtime` package must be installed in the *active* interpreter first, then:
+
+```bash
+python -m agi_runtime.cli onboard
+python -m agi_runtime.cli run
+```
+
+**Editable install needs a path:** use `pip install -e .` (note the `.`), not `pip install -e` alone.
+
+**Unix install script (from a local clone):**
 
 ```bash
 git clone https://github.com/mmsk2007/helloagi.git
 cd helloagi
 ./scripts/install.sh --source local
 ```
+
+---
+
+### From onboarding to Telegram (step by step)
+
+1. **Activate the same venv** you used for `pip install` (see above).
+2. **Install extras** if you have not already: `pip install "helloagi[rich,telegram]"` or `pip install -e ".[rich,telegram]"` so `python-telegram-bot` is present.
+3. **Create a bot** in Telegram: talk to [@BotFather](https://t.me/BotFather), choose *New Bot*, copy the **HTTP API token**.
+4. **Onboard** from the directory where you want config files (`helloagi.json`, `.env`, `helloagi.onboard.json`, `memory/`):
+
+   ```bash
+   helloagi onboard
+   ```
+
+   Paste the token when asked (or add `TELEGRAM_BOT_TOKEN=...` to `.env` later). Set **ANTHROPIC_API_KEY** in `.env` (or during onboarding) so the agent can reply with Claude.
+
+5. **Initialize config** if you skipped it: `helloagi init` (wizard may already create `helloagi.json`).
+
+6. **Start the API + bot** (process stays in the foreground; keep this terminal open):
+
+   ```bash
+   helloagi serve --telegram
+   ```
+
+   Defaults: HTTP API at `http://127.0.0.1:8787`, Telegram long-polling in the same process.
+
+7. **In Telegram**, open your bot, send `/start`, then send a normal message.
+
+   By default, Telegram replies hide `allow` governance headers for a more natural chat flow
+   (escalate/deny still show). Set `HELLOAGI_TELEGRAM_SHOW_GOV=1` to always show headers.
+   Multi-user memory/history is scoped per principal; set `HELLOAGI_MEMORY_SCOPE=strict` to
+   disable legacy unscoped memory fallback.
+
+**Optional background process:** after `helloagi service install --telegram`, run `helloagi service start` (uses the same `serve --telegram` under the hood; working directory should be the project folder with `.env`).
 
 ---
 
@@ -153,7 +223,7 @@ Every agent framework today falls into one of two traps:
 
 2. **Safe but useless** — LangChain, CrewAI, and chain-of-thought wrappers that are basically prompt templates with extra steps. They can't actually *do* anything autonomously.
 
-HelloAGI is the **first and only framework** that solves both simultaneously.
+HelloAGI is designed to solve both simultaneously with governed autonomy.
 
 ### The Comparison
 
@@ -503,14 +573,14 @@ PYTHONPATH=src python -m unittest discover -s tests -p "test_*.py"
 
 > *"Every great revolution started with a single spark. This is yours."*
 
-HelloAGI is more than a framework. It is the beginning of a new era — where AGI-class intelligence is **open, governed, and accessible to everyone**.
+HelloAGI is more than a framework. It is a practical path toward open, governed, and accessible autonomous intelligence.
 
 We believe:
 - **Intelligence should be open-source** — not locked behind corporate walls
 - **Autonomy requires governance** — unbounded power needs deterministic safety
 - **Agents should grow** — not reset to zero every conversation
 - **The future is local-first** — your data, your machine, your agent
-- **Everyone deserves AGI** — `pip install helloagi` → real autonomous intelligence in 30 seconds
+- **Everyone deserves capable agents** — `pip install helloagi` gives you governed autonomy you can run locally
 
 ### How to Contribute
 

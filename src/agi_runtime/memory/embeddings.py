@@ -104,7 +104,12 @@ class GeminiEmbeddingStore:
         )
         return result.embeddings[0].values
 
-    def add(self, text: str, metadata: Optional[dict] = None) -> bool:
+    def add(
+        self,
+        text: str,
+        metadata: Optional[dict] = None,
+        principal_id: Optional[str] = None,
+    ) -> bool:
         """Embed and store a text entry. Returns True if successful."""
         vector = self.embed_text(text)
         if vector is None:
@@ -114,16 +119,25 @@ class GeminiEmbeddingStore:
         text_hash = hashlib.sha256(text.encode()).hexdigest()[:16]
         self._entries = [e for e in self._entries if e.text_hash != text_hash]
 
+        md = dict(metadata or {})
+        if principal_id:
+            md["principal_id"] = principal_id
         entry = EmbeddingEntry(
             text=text,
             vector=vector,
-            metadata=metadata or {},
+            metadata=md,
         )
         self._entries.append(entry)
         self._save()
         return True
 
-    def search(self, query: str, top_k: int = 5) -> List[SimilarityResult]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        principal_id: Optional[str] = None,
+        scope: str = "compat",
+    ) -> List[SimilarityResult]:
         """Find the most similar stored entries to a query string.
 
         Uses cosine similarity over the Gemini Embedding 2 vectors.
@@ -134,6 +148,8 @@ class GeminiEmbeddingStore:
 
         scored = []
         for entry in self._entries:
+            if not _entry_visible_for_principal(entry, principal_id=principal_id, scope=scope):
+                continue
             score = _cosine_similarity(query_vector, entry.vector)
             scored.append(SimilarityResult(
                 text=entry.text,
@@ -162,3 +178,17 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def _entry_visible_for_principal(
+    entry: EmbeddingEntry,
+    principal_id: Optional[str],
+    scope: str,
+) -> bool:
+    if not principal_id:
+        return True
+    scope = (scope or "compat").strip().lower()
+    entry_pid = entry.metadata.get("principal_id")
+    if scope == "strict":
+        return entry_pid == principal_id
+    return entry_pid in (None, principal_id)

@@ -8,6 +8,36 @@
 
 ---
 
+## Option 0: Virtual environment (recommended on Windows / conda)
+
+Installing into **Anaconda/Miniconda `base`** often breaks with partial uninstalls (folders like `~atplotlib`, missing `*.dist-info`, or **`WinError 183`** during upgrades). Use a **dedicated venv** for HelloAGI:
+
+**Windows (PowerShell):**
+
+```powershell
+cd helloagi
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -U pip
+pip install -e ".[rich,telegram]"
+```
+
+If `Activate.ps1` is blocked, run once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`.
+
+**macOS / Linux:**
+
+```bash
+cd helloagi
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -U pip
+pip install -e ".[rich,telegram]"
+```
+
+Then run `helloagi onboard` and all other commands **with this venv activated**. Editable install **must** include the project path: `pip install -e .` (the `.` is required).
+
+---
+
 ## Option A: One-Liner Install (recommended)
 
 ```bash
@@ -26,12 +56,14 @@ This follows the same flow on Windows and launches onboarding without requiring 
 
 ## Option B: PyPI Install
 
+Prefer a **venv** (Option 0) over `--user` into conda `base` on Windows.
+
 ```bash
-python -m pip install --user "helloagi[rich,telegram]"
+python -m pip install "helloagi[rich,telegram]"
 python -m agi_runtime.cli onboard
 ```
 
-This is the most reliable manual install path because it works even before shell PATH refreshes expose the `helloagi` command.
+This works even before shell PATH refreshes expose the `helloagi` command (after install, `agi_runtime` is importable in that same interpreter).
 
 ## Option C: Install from Source
 
@@ -74,6 +106,23 @@ docker run --rm -p 8787:8787 -e ANTHROPIC_API_KEY=your-key helloagi:latest
 ```
 
 The container runs the HTTP API server on port 8787 by default.
+
+---
+
+## Telegram after onboarding
+
+1. Install the Telegram extra: `pip install "helloagi[rich,telegram]"` (or `pip install -e ".[rich,telegram]"` from a clone).
+2. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token into onboarding or into `.env` as `TELEGRAM_BOT_TOKEN`.
+3. Set `ANTHROPIC_API_KEY` in `.env` for Claude-backed replies (unless you use another configured provider).
+4. From the directory that contains `.env` and `helloagi.json`, run:
+
+   ```bash
+   helloagi serve --telegram
+   ```
+
+5. In Telegram, open the bot, send `/start`, then chat normally.
+
+Optional: `helloagi service install --telegram` then `helloagi service start` to run detached (same working directory so `.env` is found).
 
 ---
 
@@ -173,6 +222,9 @@ curl -s http://127.0.0.1:8787/chat \
 
 | Problem | Solution |
 |---|---|
+| **`pip install -e` says “requires 1 argument”** | Pass the project directory: `pip install -e .` (note the dot). |
+| **Windows `WinError 183` … `~yping_extensions…dist-info`** | Do not install into a broken conda `base`. Create a **venv** (Option 0), activate it, install again. If you must repair `base`, close all Python processes, delete stray `~*` folders under `Lib\site-packages` that pip left behind, then retry. |
+| **`python -m agi_runtime.cli` fails with “No module named agi_runtime”** | Install the package into the **same** Python you are invoking: `pip install -e ".[rich,telegram]"` or `pip install "helloagi[rich,telegram]"`. |
 | `command not found: helloagi` | Run `python -m agi_runtime.cli run`, then add Python's user scripts directory to PATH |
 | `ModuleNotFoundError: anthropic` | Run `pip install anthropic` |
 | Agent returns template responses | Set `ANTHROPIC_API_KEY` for Claude backbone |

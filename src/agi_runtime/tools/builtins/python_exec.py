@@ -29,6 +29,8 @@ def python_exec(code: str, timeout: int = 30) -> ToolResult:
             [sys.executable, tmp_path],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
         )
 

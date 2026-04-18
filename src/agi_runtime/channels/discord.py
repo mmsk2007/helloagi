@@ -36,6 +36,25 @@ class DiscordChannel(BaseChannel):
         self.token = token or os.environ.get("DISCORD_BOT_TOKEN", "")
         self._client = None
 
+    @staticmethod
+    def _is_dm_channel(channel) -> bool:
+        channel_type = str(getattr(channel, "type", "")).lower()
+        return "private" in channel_type or "dm" in channel_type
+
+    def _principal_for_interaction(self, interaction) -> str:
+        user_id = str(interaction.user.id)
+        if self._is_dm_channel(interaction.channel):
+            return f"discord:dm:{user_id}"
+        channel_id = str(interaction.channel_id or "")
+        return f"discord:channel:{channel_id}:user:{user_id}"
+
+    def _principal_for_message(self, message) -> str:
+        user_id = str(message.author.id)
+        if self._is_dm_channel(message.channel):
+            return f"discord:dm:{user_id}"
+        channel_id = str(message.channel.id)
+        return f"discord:channel:{channel_id}:user:{user_id}"
+
     async def start(self):
         """Start the Discord bot."""
         if not self.token:
@@ -103,7 +122,7 @@ class DiscordChannel(BaseChannel):
         async def cmd_new(interaction: discord.Interaction):
             user_id = str(interaction.user.id)
             channel_self.clear_session(user_id)
-            agent.clear_history()
+            agent.clear_history(principal_id=channel_self._principal_for_interaction(interaction))
             await interaction.response.send_message("🔄 Fresh conversation started.")
 
         @bot.tree.command(name="ask", description="Ask HelloAGI a question")
@@ -114,6 +133,7 @@ class DiscordChannel(BaseChannel):
             agent.on_user_input = lambda prompt: "y"  # Auto-approve in Discord
 
             try:
+                agent.set_principal(channel_self._principal_for_interaction(interaction))
                 r = agent.think(message)
 
                 gov_icon = {"allow": "🟢", "escalate": "🟡", "deny": "🔴"}.get(r.decision, "⬜")
@@ -154,6 +174,7 @@ class DiscordChannel(BaseChannel):
                 agent.on_user_input = lambda prompt: "y"
 
                 try:
+                    agent.set_principal(channel_self._principal_for_message(message))
                     r = agent.think(text)
 
                     gov_icon = {"allow": "🟢", "escalate": "🟡", "deny": "🔴"}.get(r.decision, "⬜")

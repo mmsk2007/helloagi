@@ -10,6 +10,7 @@ Every tool self-registers at import time. Tools declare:
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import inspect
 import json
 import traceback
@@ -174,6 +175,34 @@ class ToolRegistry:
                 future = pool.submit(asyncio.run, self.execute(name, params))
                 return future.result()
         return asyncio.run(self.execute(name, params))
+
+
+_TOOL_CONTEXT: contextvars.ContextVar[Dict[str, Any]] = contextvars.ContextVar(
+    "helloagi_tool_context",
+    default={},
+)
+
+
+def set_tool_context(**kwargs: Any):
+    """Set task-local tool execution context and return reset token."""
+    current = dict(_TOOL_CONTEXT.get() or {})
+    current.update(kwargs)
+    return _TOOL_CONTEXT.set(current)
+
+
+def reset_tool_context(token) -> None:
+    """Restore tool execution context using a token from set_tool_context."""
+    _TOOL_CONTEXT.reset(token)
+
+
+def get_tool_context() -> Dict[str, Any]:
+    """Return task-local tool execution context."""
+    return dict(_TOOL_CONTEXT.get() or {})
+
+
+def get_tool_context_value(key: str, default: Any = None) -> Any:
+    """Convenience getter for one context field."""
+    return get_tool_context().get(key, default)
 
 
 # --- Decorator API ---
