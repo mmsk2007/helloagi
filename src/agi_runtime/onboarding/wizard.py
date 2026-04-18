@@ -101,6 +101,11 @@ class ProviderKeys:
 
 
 @dataclass
+class ChannelKeys:
+    telegram_bot_token: str = ""
+
+
+@dataclass
 class OnboardConfig:
     agent_name: str = "HelloAGI"
     owner_name: str = ""
@@ -108,12 +113,22 @@ class OnboardConfig:
     default_model_tier: str = "balanced"
     focus: str = "general"
     providers: ProviderKeys = field(default_factory=ProviderKeys)
+    channels: ChannelKeys = field(default_factory=ChannelKeys)
     env_detected: dict = field(default_factory=dict)
     setup_complete: bool = False
 
 
 def _to_dict(cfg: OnboardConfig) -> dict:
     return asdict(cfg)
+
+
+def _write_private_json(path: Path, data: dict):
+    """Persist onboarding data with best-effort private permissions."""
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except Exception:
+        pass
 
 
 # ─��� Environment Detection ────────────────────────────────────────────────────
@@ -135,6 +150,13 @@ def _detect_environment() -> dict:
     env["has_anthropic_key"] = bool(os.environ.get("ANTHROPIC_API_KEY"))
     env["has_openai_key"] = bool(os.environ.get("OPENAI_API_KEY"))
     env["has_google_key"] = bool(os.environ.get("GOOGLE_API_KEY"))
+    env["has_telegram_token"] = bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
+
+    try:
+        import telegram  # noqa: F401
+        env["has_telegram_lib"] = True
+    except ImportError:
+        env["has_telegram_lib"] = False
 
     # Check for Rich library
     try:
@@ -230,10 +252,16 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         _ok("OpenAI API key found in environment")
     if env.get("has_google_key"):
         _ok("Google API key found in environment")
+    if env.get("has_telegram_token"):
+        _ok("Telegram bot token found in environment")
     if env.get("has_rich"):
         _ok("Rich library available (beautiful terminal UI)")
     else:
         _warn("Rich not installed. Run: pip install helloagi[rich]")
+    if env.get("has_telegram_lib"):
+        _ok("Telegram library available")
+    else:
+        _warn("Telegram bot library not installed. Run: pip install 'helloagi[telegram]'")
     print()
 
     # Step 2: Agent Identity
@@ -297,6 +325,15 @@ def run_wizard(path: str = "helloagi.onboard.json"):
         _ok("Google key already set in environment")
     else:
         google_key = _secret_prompt("GOOGLE_API_KEY (optional, for embeddings)")
+
+    telegram_token = ""
+    print()
+    print(f"    {DIM}Telegram is optional. Add a bot token now if you want chat-ready onboarding.{NC}")
+    if env.get("has_telegram_token"):
+        _ok("Telegram bot token already set in environment")
+        telegram_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    else:
+        telegram_token = _secret_prompt("TELEGRAM_BOT_TOKEN (optional, for helloagi serve --telegram)")
     print()
 
     # Step 5: Self-test & Save
@@ -307,6 +344,8 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     # Set key temporarily for self-test
     if anthropic_key and not os.environ.get("ANTHROPIC_API_KEY"):
         os.environ["ANTHROPIC_API_KEY"] = anthropic_key
+    if telegram_token and not os.environ.get("TELEGRAM_BOT_TOKEN"):
+        os.environ["TELEGRAM_BOT_TOKEN"] = telegram_token
 
     test_results = _run_self_test(anthropic_key)
 
@@ -339,12 +378,15 @@ def run_wizard(path: str = "helloagi.onboard.json"):
             anthropic_api_key=anthropic_key,
             google_api_key=google_key,
         ),
+        channels=ChannelKeys(
+            telegram_bot_token=telegram_token,
+        ),
         env_detected=env,
         setup_complete=True,
     )
 
     p = Path(path)
-    p.write_text(json.dumps(_to_dict(cfg), indent=2))
+    _write_private_json(p, _to_dict(cfg))
 
     # Also create helloagi.json if it doesn't exist
     config_path = Path("helloagi.json")
@@ -379,6 +421,7 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     print(f"    Model:      {CYAN}{tier}{NC}")
     print(f"    Tools:      {CYAN}{test_results.get('tools', {}).get('count', '?')}{NC} available")
     print(f"    LLM:        {GREEN}connected{NC}" if test_results.get("llm", {}).get("ok") else f"    LLM:        {YELLOW}template mode{NC}")
+    print(f"    Telegram:   {GREEN}configured{NC}" if telegram_token or env.get("has_telegram_token") else f"    Telegram:   {DIM}not configured{NC}")
     print(f"    SRG:        {GREEN}active{NC} (deterministic governance)")
     print()
 
@@ -394,6 +437,10 @@ def run_wizard(path: str = "helloagi.onboard.json"):
     print(f"    {CYAN}${NC} {BOLD}helloagi serve{NC}")
     print(f"      {DIM}Start HTTP API on localhost:8787{NC}")
     print()
+    if telegram_token or env.get("has_telegram_token"):
+        print(f"    {CYAN}${NC} {BOLD}helloagi serve --telegram{NC}")
+        print(f"      {DIM}Start Telegram chat using your configured bot token{NC}")
+        print()
     print(f"    {CYAN}${NC} {BOLD}helloagi dashboard{NC}")
     print(f"      {DIM}Live monitoring dashboard{NC}")
     print()
@@ -413,6 +460,7 @@ def status(path: str = "helloagi.onboard.json"):
 
     data = json.loads(p.read_text())
     providers = data.get("providers", {})
+    channels = data.get("channels", {})
 
     print(f"{GREEN}Onboarding: complete{NC}")
     print(f"  Agent:      {data.get('agent_name')}")
@@ -425,6 +473,9 @@ def status(path: str = "helloagi.onboard.json"):
         label = k.replace("_api_key", "").capitalize()
         status_str = f"{GREEN}set{NC}" if v else f"{DIM}not set{NC}"
         print(f"    {label}: {status_str}")
+    telegram_status = f"{GREEN}set{NC}" if channels.get("telegram_bot_token", "") else f"{DIM}not set{NC}"
+    print(f"  Channels:")
+    print(f"    Telegram: {telegram_status}")
 
 
 def is_onboarded(path: str = "helloagi.onboard.json") -> bool:

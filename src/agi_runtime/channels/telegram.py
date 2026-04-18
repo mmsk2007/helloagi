@@ -17,8 +17,10 @@ Setup:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
+from pathlib import Path
 from typing import Optional
 
 from agi_runtime.channels.base import BaseChannel, ChannelMessage, ChannelResponse
@@ -27,13 +29,29 @@ from agi_runtime.core.agent import HelloAGIAgent
 logger = logging.getLogger("helloagi.telegram")
 
 
+def _load_onboarded_telegram_token(path: str = "helloagi.onboard.json") -> str:
+    """Load a Telegram token from onboarding state when env vars are absent."""
+    p = Path(path)
+    if not p.exists():
+        return ""
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+    channels = data.get("channels", {})
+    if not isinstance(channels, dict):
+        return ""
+    token = channels.get("telegram_bot_token", "")
+    return token if isinstance(token, str) else ""
+
+
 class TelegramChannel(BaseChannel):
     """Telegram bot channel for HelloAGI."""
 
     def __init__(self, agent: HelloAGIAgent, token: Optional[str] = None):
         super().__init__("telegram")
         self.agent = agent
-        self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
+        self.token = token or os.environ.get("TELEGRAM_BOT_TOKEN", "") or _load_onboarded_telegram_token()
         self._app = None
         self._pending_approvals: dict = {}  # message_id -> callback
 
@@ -42,7 +60,7 @@ class TelegramChannel(BaseChannel):
         if not self.token:
             raise ValueError(
                 "Telegram bot token not configured. "
-                "Set TELEGRAM_BOT_TOKEN environment variable."
+                "Set TELEGRAM_BOT_TOKEN or run helloagi onboard."
             )
 
         try:

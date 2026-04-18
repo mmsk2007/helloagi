@@ -2,7 +2,7 @@ param(
     [ValidateSet("pypi", "git", "local")]
     [string]$Source = $(if ($env:HELLOAGI_INSTALL_SOURCE) { $env:HELLOAGI_INSTALL_SOURCE } else { "pypi" }),
     [string]$Ref = $(if ($env:HELLOAGI_GIT_REF) { $env:HELLOAGI_GIT_REF } else { "main" }),
-    [string]$Package = $(if ($env:HELLOAGI_PACKAGE_SPEC) { $env:HELLOAGI_PACKAGE_SPEC } else { "helloagi[rich]" }),
+    [string]$Package = $(if ($env:HELLOAGI_PACKAGE_SPEC) { $env:HELLOAGI_PACKAGE_SPEC } else { "helloagi[rich,telegram]" }),
     [switch]$SkipOnboard,
     [switch]$UpgradePip
 )
@@ -84,8 +84,8 @@ function Ensure-Pip {
 function Build-InstallTarget {
     switch ($Source) {
         "pypi" { return $Package }
-        "git" { return "helloagi[rich] @ git+$RepoUrl@$Ref" }
-        "local" { return "$Root[rich]" }
+        "git" { return "helloagi[rich,telegram] @ git+$RepoUrl@$Ref" }
+        "local" { return "$Root[rich,telegram]" }
         default { Fail-Install "Unsupported source '$Source'." }
     }
 }

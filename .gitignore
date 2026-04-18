@@ -4,10 +4,10 @@ _local_install/
 .venv/
 build/
 src/*.egg-info/
+.env
+.env.*
 helloagi.json
-memory/events.jsonl
-memory/runtime_state.json
-memory/helloagi.db
+memory/
 
 docs/daily-research/
 helloagi.onboard.json

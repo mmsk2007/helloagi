@@ -2,8 +2,10 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from agi_runtime.core.agent import HelloAGIAgent
+from agi_runtime.channels.telegram import _load_onboarded_telegram_token
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,6 +48,15 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("file_read", info)
         self.assertNotIn("bash_exec", info)
         self.assertNotIn("file_write", info)
+
+    def test_onboarded_telegram_token_can_be_loaded(self):
+        with TemporaryDirectory() as tmp:
+            onboard = Path(tmp) / "helloagi.onboard.json"
+            onboard.write_text(
+                '{"channels": {"telegram_bot_token": "123:token"}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(_load_onboarded_telegram_token(str(onboard)), "123:token")
 
 
 if __name__ == "__main__":
