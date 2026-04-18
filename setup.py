@@ -18,6 +18,7 @@ setup(
         'anyio>=4.0',
         'croniter>=2.0',
         'requests>=2.28',
+        'tzdata>=2024.1',
     ],
     extras_require={
         'rich': ['rich>=13.0'],

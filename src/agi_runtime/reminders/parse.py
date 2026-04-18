@@ -4,6 +4,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from datetime import timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
 
@@ -112,11 +113,11 @@ def _parse_natural_once(text: str, *, tz: ZoneInfo, now_ts: float) -> float:
         ) from exc
 
 
-def _safe_zone(name: str) -> ZoneInfo:
+def _safe_zone(name: str):
     try:
         return ZoneInfo(name)
     except Exception:
-        return ZoneInfo("UTC")
+        return dt_timezone.utc
 
 
 def _seconds_for_unit(amount: int, unit: str) -> int:

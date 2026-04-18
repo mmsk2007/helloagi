@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
 
@@ -37,9 +38,9 @@ def retry_backoff_seconds(consecutive_errors: int) -> float:
     return min(3600.0, 30.0 * (2 ** consecutive_errors))
 
 
-def _safe_zone(name: str) -> ZoneInfo:
+def _safe_zone(name: str):
     try:
         return ZoneInfo(name)
     except Exception:
-        return ZoneInfo("UTC")
+        return dt_timezone.utc
 

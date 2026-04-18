@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import datetime
+from datetime import timezone as dt_timezone
 from zoneinfo import ZoneInfo
 
 from agi_runtime.reminders.parse import parse_schedule_input
@@ -119,6 +120,6 @@ class ReminderService:
         try:
             tz = ZoneInfo(tz_name)
         except Exception:
-            tz = ZoneInfo("UTC")
+            tz = dt_timezone.utc
         return datetime.fromtimestamp(ts, tz=tz).strftime("%Y-%m-%d %H:%M:%S %Z")
 
