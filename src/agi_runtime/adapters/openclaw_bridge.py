@@ -127,9 +127,10 @@ if _SDK_AVAILABLE:
 class OpenClawAgent:
     """Governed Claude Agent SDK agent backed by HelloAGI infrastructure."""
 
-    def __init__(self, settings: RuntimeSettings | None = None):
+    def __init__(self, settings: RuntimeSettings | None = None, policy_pack: str = "safe-default"):
         self.settings = settings or RuntimeSettings()
-        self.governor = SRGGovernor()
+        self.policy_pack = policy_pack
+        self.governor = SRGGovernor(policy_pack=policy_pack)
         self.ale = ALEngine()
         self.identity = IdentityEngine(
             path=self.settings.memory_path,
@@ -235,7 +236,8 @@ class OpenClawAgent:
 async def run_openclaw_agent(
     prompt: str,
     settings: RuntimeSettings | None = None,
+    policy_pack: str = "safe-default",
 ) -> OpenClawTask:
     """Top-level async entry-point for running the OpenClaw agent."""
-    agent = OpenClawAgent(settings=settings)
+    agent = OpenClawAgent(settings=settings, policy_pack=policy_pack)
     return await agent.run(prompt)

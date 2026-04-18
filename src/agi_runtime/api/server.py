@@ -109,12 +109,13 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
 
     def _handle_health(self):
         uptime = time.time() - self._stats["started_at"]
-        tools = self.agent.tool_registry.list_tools()
+        tools = self.agent._list_allowed_tools()
         self._send_json(200, {
             "ok": True,
             "service": "helloagi",
             "version": "0.5.0",
             "agent": self.agent.identity.state.name,
+            "policy_pack": self.agent.policy_pack.name,
             "tools": len(tools),
             "skills": len(self.agent.skills.list_skills()),
             "llm_configured": self.agent._claude is not None,
@@ -124,7 +125,7 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
         })
 
     def _handle_tools(self):
-        tools = self.agent.tool_registry.list_tools()
+        tools = self.agent._list_allowed_tools()
         tool_list = []
         for t in sorted(tools, key=lambda x: (x.toolset.value, x.name)):
             tool_list.append({
@@ -167,6 +168,7 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
         policy = self.agent.governor.policy
         self._send_json(200, {
             "srg_active": True,
+            "policy_pack": self.agent.policy_pack.name,
             "deny_keywords": policy.deny_keywords,
             "escalate_keywords": policy.escalate_keywords,
             "thresholds": {
@@ -272,17 +274,17 @@ class ThreadedHTTPServer(HTTPServer):
             self.shutdown_request(request)
 
 
-def run_server(host: str = "127.0.0.1", port: int = 8787, config_path: str = "helloagi.json"):
+def run_server(host: str = "127.0.0.1", port: int = 8787, config_path: str = "helloagi.json", policy_pack: str = "safe-default"):
     """Start the HelloAGI API server."""
     settings = load_settings(config_path)
-    agent = HelloAGIAgent(settings)
+    agent = HelloAGIAgent(settings, policy_pack=policy_pack)
 
     HelloAGIHandler.agent = agent
     HelloAGIHandler.api_key = os.environ.get("HELLOAGI_API_KEY")
 
     srv = ThreadedHTTPServer((host, port), HelloAGIHandler)
 
-    tools_count = len(agent.tool_registry.list_tools())
+    tools_count = len(agent._list_allowed_tools())
     skills_count = len(agent.skills.list_skills())
     llm_status = "connected" if agent._claude else "not configured"
 

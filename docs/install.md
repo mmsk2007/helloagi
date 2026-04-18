@@ -11,36 +11,53 @@
 ## Option A: One-Liner Install (recommended)
 
 ```bash
-pip install helloagi
-helloagi onboard
+curl -fsSL https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/install.sh | bash
 ```
 
-This installs the `helloagi` CLI command globally and launches the interactive onboarding wizard.
+The installer installs `helloagi[rich]`, initializes the runtime, runs a health check, and launches the onboarding wizard immediately.
 
-## Option B: Install from Source
+### Windows PowerShell
+
+```powershell
+irm https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/install.ps1 | iex
+```
+
+This follows the same flow on Windows and launches onboarding without requiring the `helloagi` console script to be on PATH yet.
+
+## Option B: PyPI Install
+
+```bash
+python -m pip install --user "helloagi[rich]"
+python -m agi_runtime.cli onboard
+```
+
+This is the most reliable manual install path because it works even before shell PATH refreshes expose the `helloagi` command.
+
+## Option C: Install from Source
 
 ```bash
 git clone https://github.com/mmsk2007/helloagi.git
 cd helloagi
-pip install -e .
-helloagi onboard
+./scripts/install.sh --source local
 ```
 
-## Option C: Quick Install Script
+Or on Windows:
 
-```bash
+```powershell
 git clone https://github.com/mmsk2007/helloagi.git
 cd helloagi
-./scripts/install.sh
+.\scripts\install.ps1 -Source local
 ```
 
-The install script handles dependency installation, config initialization, and health checks. For a global editable install:
+## Option D: Git Install Without Cloning
 
 ```bash
-HELLOAGI_GLOBAL_INSTALL=1 ./scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/install.sh | bash -s -- --source git --ref main
 ```
 
-## Option D: Docker
+This installs from the GitHub repo directly instead of PyPI.
+
+## Option E: Docker
 
 ```bash
 docker pull ghcr.io/mmsk2007/helloagi:latest
@@ -94,6 +111,7 @@ source .env
 ```bash
 helloagi doctor
 helloagi doctor-score
+helloagi update
 ```
 
 ### 5. Initialize the state database (optional)
@@ -144,11 +162,12 @@ curl -s http://127.0.0.1:8787/chat \
 
 | Problem | Solution |
 |---|---|
-| `command not found: helloagi` | Run `pip install -e .` or `pip install helloagi` |
+| `command not found: helloagi` | Run `python -m agi_runtime.cli run`, then add Python's user scripts directory to PATH |
 | `ModuleNotFoundError: anthropic` | Run `pip install anthropic` |
 | Agent returns template responses | Set `ANTHROPIC_API_KEY` for Claude backbone |
 | Doctor shows missing files | Run `helloagi init` first |
 | Port 8787 in use | Use `--port 8788` or stop the other process |
+| Need to remove the package safely | Run `helloagi uninstall --yes` |
 
 ---
 
@@ -156,9 +175,11 @@ curl -s http://127.0.0.1:8787/chat \
 
 ```bash
 # If installed with pip
-pip uninstall helloagi
+python -m pip uninstall helloagi
 
 # Clean up generated files
 rm -f helloagi.json helloagi.onboard.json
 rm -rf memory/
 ```
+
+See also: [Updating](updating.md) and [Uninstall](uninstall.md)

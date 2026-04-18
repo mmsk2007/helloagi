@@ -63,16 +63,21 @@ This is the agentic AGI revolution. And it starts here.
 ## The 30-Second Start
 
 ```bash
-pip install helloagi
-helloagi
+curl -fsSL https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/install.sh | bash
 ```
 
-That's it. On first run, HelloAGI launches a beautiful onboarding wizard that auto-detects your environment, configures your agent, runs a self-test, and drops you into a ready-to-go AGI session.
+On Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/install.ps1 | iex
+```
+
+That's it. The installer bootstraps HelloAGI, initializes the runtime, and launches the onboarding wizard immediately so users land in a ready-to-go AGI session without fighting PATH issues.
 
 > *"The starting point of all achievement is desire."*
 > — Napoleon Hill
 
-### What Happens When You Run `helloagi`
+### What Happens During Install + First Run
 
 ```
   ╦ ╦╔═╗╦  ╦  ╔═╗╔═╗╔═╗╦  v0.5.0
@@ -114,6 +119,21 @@ helloagi serve --discord                        # + Discord bot
 helloagi dashboard                              # Live monitoring dashboard
 helloagi tools                                  # List all 17 tools
 helloagi skills                                 # List learned skills
+helloagi update                                 # Upgrade in-place via pip
+helloagi uninstall --yes                        # Remove installed package
+```
+
+### Other Install Paths
+
+```bash
+pip install --user "helloagi[rich]"             # Fast PyPI install
+python -m agi_runtime.cli onboard               # Launch onboarding even before PATH refresh
+```
+
+```bash
+git clone https://github.com/mmsk2007/helloagi.git
+cd helloagi
+./scripts/install.sh --source local
 ```
 
 ---

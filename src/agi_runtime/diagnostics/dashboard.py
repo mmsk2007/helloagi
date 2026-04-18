@@ -122,7 +122,8 @@ def render_dashboard(
 
     if agent:
         lines.append(f"  Agent: {agent.identity.state.name} ({agent.identity.state.character})")
-        lines.append(f"  Tools: {len(agent.tool_registry.list_tools())} | Skills: {len(agent.skills.list_skills())}")
+        lines.append(f"  Policy: {agent.policy_pack.name}")
+        lines.append(f"  Tools: {len(agent._list_allowed_tools())} | Skills: {len(agent.skills.list_skills())}")
         lines.append(f"  LLM: {'connected' if agent._claude else 'not configured'}")
         lines.append("")
 
@@ -231,7 +232,8 @@ def render_rich_dashboard(
     info_table.add_column("Value")
     if agent:
         info_table.add_row("Name", agent.identity.state.name)
-        info_table.add_row("Tools", str(len(agent.tool_registry.list_tools())))
+        info_table.add_row("Policy", agent.policy_pack.name)
+        info_table.add_row("Tools", str(len(agent._list_allowed_tools())))
         info_table.add_row("Skills", str(len(agent.skills.list_skills())))
         info_table.add_row("LLM", "connected" if agent._claude else "not configured")
         info_table.add_row("SRG", "active")

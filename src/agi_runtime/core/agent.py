@@ -35,6 +35,7 @@ from agi_runtime.core.personality import GrowthTracker, build_personality_prompt
 from agi_runtime.intelligence.sentiment import SentimentTracker
 from agi_runtime.intelligence.context_compiler import ContextCompiler
 from agi_runtime.intelligence.patterns import PatternDetector
+from agi_runtime.policies.packs import get_pack
 
 try:
     import anthropic as _anthropic_lib
@@ -68,11 +69,12 @@ class HelloAGIAgent:
     Every tool call passes through SRG. No exceptions.
     """
 
-    MAX_TURNS = 40
     MAX_OUTPUT_TOKENS = 16384
 
     def __init__(self, settings: RuntimeSettings | None = None, policy_pack: str = "safe-default"):
         self.settings = settings or RuntimeSettings()
+        self.policy_pack_name = policy_pack
+        self.policy_pack = get_pack(policy_pack)
         self.governor = SRGGovernor(policy_pack=policy_pack)
         self.ale = ALEngine()
         self.identity = IdentityEngine(
@@ -90,6 +92,7 @@ class HelloAGIAgent:
         self.sentiment = SentimentTracker()
         self.context_compiler = ContextCompiler()
         self.patterns = PatternDetector()
+        self.max_turns = self.policy_pack.max_turns
 
         # Initialize tool registry and discover all builtin tools
         self.tool_registry = ToolRegistry.get_instance()
@@ -202,6 +205,29 @@ class HelloAGIAgent:
             parts.append("</memory-context>")
 
         return "\n".join(parts)
+
+    def _allowed_tool(self, tool_name: str) -> bool:
+        """Check whether the active policy pack allows a tool."""
+        if self.policy_pack.read_only:
+            blocked_in_read_only = {
+                "bash_exec",
+                "python_exec",
+                "file_write",
+                "file_patch",
+                "skill_create",
+                "delegate_task",
+            }
+            if tool_name in blocked_in_read_only:
+                return False
+
+        if self.policy_pack.allowed_tools and tool_name not in self.policy_pack.allowed_tools:
+            return False
+        if self.policy_pack.blocked_tools and tool_name in self.policy_pack.blocked_tools:
+            return False
+        return True
+
+    def _list_allowed_tools(self):
+        return [t for t in self.tool_registry.list_tools() if self._allowed_tool(t.name)]
 
     def _get_memory_context(self) -> Optional[str]:
         """Retrieve relevant memories for the current context via semantic search."""
@@ -431,7 +457,7 @@ class HelloAGIAgent:
         total_tool_calls = 0
         turns_used = 0
 
-        for turn in range(self.MAX_TURNS):
+        for turn in range(self.max_turns):
             turns_used = turn + 1
 
             # Call Claude with tools
@@ -510,6 +536,21 @@ class HelloAGIAgent:
             for tc in tool_calls:
                 total_tool_calls += 1
                 self.growth.record_tool_call()
+
+                if not self._allowed_tool(tc.name):
+                    result_content = f"Tool '{tc.name}' is not available under the active policy pack '{self.policy_pack.name}'."
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": result_content,
+                    })
+                    self.journal.write("tool_blocked_by_policy_pack", {
+                        "tool": tc.name,
+                        "policy_pack": self.policy_pack.name,
+                    })
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
 
                 # Special handling: delegate_task spawns a real sub-agent
                 if tc.name == "delegate_task" and self._claude:
@@ -638,10 +679,10 @@ class HelloAGIAgent:
 
         # Reached max turns
         final_text = (
-            f"I've used all {self.MAX_TURNS} turns working on your request. "
+            f"I've used all {self.max_turns} turns working on your request. "
             f"Made {total_tool_calls} tool calls across {turns_used} turns."
         )
-        self.journal.write("max_turns_reached", {"tool_calls": total_tool_calls})
+        self.journal.write("max_turns_reached", {"tool_calls": total_tool_calls, "max_turns": self.max_turns})
         return AgentResponse(
             text=final_text, decision=gov.decision, risk=gov.risk,
             tool_calls_made=total_tool_calls, turns_used=turns_used,
@@ -677,17 +718,21 @@ class HelloAGIAgent:
 
     def _get_tool_schemas(self) -> List[dict]:
         """Get Claude-format tool schemas for all available tools."""
-        return self.tool_registry.get_schemas()
+        return [
+            schema for schema in self.tool_registry.get_schemas()
+            if self._allowed_tool(schema["name"])
+        ]
 
     def _template_response(self, user_input: str, gov: GovernanceResult) -> str:
         """Fallback response when Claude API is not available."""
-        tools_list = ", ".join(t.name for t in self.tool_registry.list_tools())
+        allowed_tools = self._list_allowed_tools()
+        tools_list = ", ".join(t.name for t in allowed_tools)
         text = (
             f"[{self.identity.state.name} | {self.identity.state.character}]\n"
             f"I received your request but my LLM backbone is not configured.\n"
             f"To enable full AGI capabilities, set ANTHROPIC_API_KEY in your environment.\n\n"
             f"Without the LLM, I can still run tools directly.\n"
-            f"Available tools ({len(self.tool_registry.list_tools())}): {tools_list}\n"
+            f"Available tools ({len(allowed_tools)}): {tools_list}\n"
         )
         if gov.decision == "escalate":
             text += "\n⚠️ This request was flagged for human confirmation."
@@ -700,7 +745,7 @@ class HelloAGIAgent:
 
     def get_tools_info(self) -> str:
         """Get a formatted list of available tools."""
-        tools = self.tool_registry.list_tools()
+        tools = self._list_allowed_tools()
         if not tools:
             return "No tools available."
 

@@ -5,6 +5,7 @@ SRG governance indicators, and slash commands.
 """
 
 import argparse
+import subprocess
 import sys
 from pathlib import Path
 
@@ -38,6 +39,23 @@ except ImportError:
     _RICH_AVAILABLE = False
 
 
+def _configure_stdio():
+    """Avoid Unicode crashes on legacy Windows terminals."""
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(errors="replace")
+            except Exception:
+                pass
+
+
+def _run_pip_command(args: list[str]) -> int:
+    """Run pip through the active Python interpreter."""
+    return subprocess.run([sys.executable, "-m", "pip", *args]).returncode
+
+
 def _gov_icon(decision: str) -> str:
     """Get governance indicator icon."""
     return {"allow": "🟢", "escalate": "🟡", "deny": "🔴"}.get(decision, "⬜")
@@ -49,7 +67,7 @@ def _risk_bar(risk: float) -> str:
     return "█" * filled + "░" * (10 - filled) + f" {risk:.2f}"
 
 
-def run_rich(goal: str, config_path: str):
+def run_rich(goal: str, config_path: str, policy_pack: str = "safe-default"):
     """Run interactive session with Rich TUI."""
     # Auto-onboard on first run
     from agi_runtime.onboarding.wizard import is_onboarded, run_wizard
@@ -57,7 +75,7 @@ def run_rich(goal: str, config_path: str):
         run_wizard()
 
     settings = load_settings(config_path)
-    agent = HelloAGIAgent(settings)
+    agent = HelloAGIAgent(settings, policy_pack=policy_pack)
 
     if _RICH_AVAILABLE:
         console = Console()
@@ -69,7 +87,7 @@ def run_rich(goal: str, config_path: str):
         console.print(Panel(
             f"[bold cyan]HelloAGI[/bold cyan] — [dim]Governed Autonomous Intelligence[/dim]\n"
             f"[dim]Agent: {agent.identity.state.name} | {agent.identity.state.character}[/dim]\n"
-            f"[dim]Tools: {len(agent.tool_registry.list_tools())} available | SRG: active[/dim]\n\n"
+            f"[dim]Tools: {len(agent._list_allowed_tools())} available | SRG: {agent.policy_pack.name}[/dim]\n\n"
             f"[dim italic magenta]\"{quote}\"[/dim italic magenta]\n"
             f"[dim italic]  — {source}[/dim italic]",
             title="🧠 HelloAGI Runtime",
@@ -227,8 +245,7 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
             print(msg)
 
     elif command == "/policy":
-        from agi_runtime.policies.packs import get_pack
-        pack = get_pack("safe-default")
+        pack = agent.policy_pack
         info = (
             f"Active policy: {pack.name}\n"
             f"Deny keywords: {', '.join(pack.deny_keywords)}\n"
@@ -326,12 +343,12 @@ def _handle_slash_command(cmd: str, agent: HelloAGIAgent, console=None):
             print(msg)
 
 
-def run_basic(goal: str, config_path: str):
+def run_basic(goal: str, config_path: str, policy_pack: str = "safe-default"):
     """Basic REPL without Rich."""
     settings = load_settings(config_path)
-    agent = HelloAGIAgent(settings)
+    agent = HelloAGIAgent(settings, policy_pack=policy_pack)
     print("HelloAGI Runtime started.")
-    print(f"Agent: {agent.identity.state.name} | Tools: {len(agent.tool_registry.list_tools())} available")
+    print(f"Agent: {agent.identity.state.name} | Policy: {agent.policy_pack.name} | Tools: {len(agent._list_allowed_tools())} available")
     print(f"Goal: {goal}")
     print("Type /help for commands, exit to quit\n")
 
@@ -371,16 +388,16 @@ def init_config(path: str):
     print(f"Initialized config at {path}")
 
 
-def oneshot(message: str, config_path: str):
+def oneshot(message: str, config_path: str, policy_pack: str = "safe-default"):
     settings = load_settings(config_path)
-    agent = HelloAGIAgent(settings)
+    agent = HelloAGIAgent(settings, policy_pack=policy_pack)
     r = agent.think(message)
     print(r.text)
 
 
-def auto(goal: str, steps: int, config_path: str):
+def auto(goal: str, steps: int, config_path: str, policy_pack: str = "safe-default"):
     settings = load_settings(config_path)
-    agent = HelloAGIAgent(settings)
+    agent = HelloAGIAgent(settings, policy_pack=policy_pack)
     loop = AutonomousLoop(agent, goal)
     results = loop.run_steps(steps=steps)
     for i, r in enumerate(results, start=1):
@@ -453,19 +470,36 @@ def replay_failure(config_path: str):
     print(rep)
 
 
-def openclaw(prompt: str, config_path: str):
+def openclaw(prompt: str, config_path: str, policy_pack: str = "safe-default"):
     import anyio
     settings = load_settings(config_path)
-    task = anyio.run(run_openclaw_agent, prompt, settings)
+    task = anyio.run(run_openclaw_agent, prompt, settings, policy_pack)
     confirm_flag = "[requires-confirm]" if task.requires_human_confirm else "[auto]"
     print(f"openclaw {confirm_flag}\n{task.summary}")
+
+
+def update_installation(package: str = "helloagi[rich]"):
+    """Update HelloAGI in the current Python environment."""
+    print(f"Updating {package}...")
+    raise SystemExit(_run_pip_command(["install", "--user", "--upgrade", package]))
+
+
+def uninstall_installation(yes: bool = False):
+    """Uninstall HelloAGI from the current Python environment."""
+    if not yes:
+        print("Refusing to uninstall without --yes.")
+        print("Run: helloagi uninstall --yes")
+        raise SystemExit(2)
+
+    print("Uninstalling helloagi...")
+    raise SystemExit(_run_pip_command(["uninstall", "-y", "helloagi"]))
 
 
 def _serve_with_channels(args):
     """Start HTTP API with optional Telegram/Discord channels."""
     import asyncio
     settings = load_settings(args.config)
-    agent = HelloAGIAgent(settings)
+    agent = HelloAGIAgent(settings, policy_pack=args.policy)
 
     from agi_runtime.channels.router import ChannelRouter
     router = ChannelRouter(agent)
@@ -510,6 +544,7 @@ def _serve_with_channels(args):
 
 
 def main():
+    _configure_stdio()
     parser = argparse.ArgumentParser(
         description="HelloAGI — Governed Autonomous Intelligence",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -529,15 +564,18 @@ def main():
     runp = sub.add_parser("run", help="run interactive runtime (Rich TUI)")
     runp.add_argument("--goal", default="general assistant")
     runp.add_argument("--config", default="helloagi.json")
+    runp.add_argument("--policy", default="safe-default")
 
     onep = sub.add_parser("oneshot", help="single message run")
     onep.add_argument("--message", required=True)
     onep.add_argument("--config", default="helloagi.json")
+    onep.add_argument("--policy", default="safe-default")
 
     autop = sub.add_parser("auto", help="run autonomous steps")
     autop.add_argument("--goal", required=True)
     autop.add_argument("--steps", type=int, default=3)
     autop.add_argument("--config", default="helloagi.json")
+    autop.add_argument("--policy", default="safe-default")
 
     serverp = sub.add_parser("serve", help="start local HTTP API")
     serverp.add_argument("--host", default="127.0.0.1")
@@ -545,9 +583,16 @@ def main():
     serverp.add_argument("--telegram", action="store_true", help="also start Telegram bot")
     serverp.add_argument("--discord", action="store_true", help="also start Discord bot")
     serverp.add_argument("--config", default="helloagi.json")
+    serverp.add_argument("--policy", default="safe-default")
 
     docp = sub.add_parser("doctor", help="check local runtime state")
     docp.add_argument("--config", default="helloagi.json")
+
+    updatep = sub.add_parser("update", help="update HelloAGI in the current Python environment")
+    updatep.add_argument("--package", default="helloagi[rich]")
+
+    uninstallp = sub.add_parser("uninstall", help="uninstall HelloAGI from the current Python environment")
+    uninstallp.add_argument("--yes", action="store_true", help="confirm uninstall")
 
     sub.add_parser("orchestrate-demo", help="run orchestration DAG demo")
     tri = sub.add_parser("tri-loop", help="run planner/executor/verifier loop")
@@ -578,12 +623,15 @@ def main():
     oc = sub.add_parser("openclaw", help="run governed openclaw agent (Claude Agent SDK)")
     oc.add_argument("--prompt", required=True, help="prompt for the openclaw agent")
     oc.add_argument("--config", default="helloagi.json")
+    oc.add_argument("--policy", default="safe-default")
 
     # New commands
     toolsp = sub.add_parser("tools", help="list available tools")
+    toolsp.add_argument("--policy", default="safe-default")
     skillsp = sub.add_parser("skills", help="list learned skills")
     dashp = sub.add_parser("dashboard", help="live monitoring dashboard")
     dashp.add_argument("--config", default="helloagi.json")
+    dashp.add_argument("--policy", default="safe-default")
 
     args = parser.parse_args()
 
@@ -595,18 +643,22 @@ def main():
     if args.cmd == "init":
         init_config(args.config)
     elif args.cmd == "run":
-        run_rich(args.goal, args.config)
+        run_rich(args.goal, args.config, args.policy)
     elif args.cmd == "oneshot":
-        oneshot(args.message, args.config)
+        oneshot(args.message, args.config, args.policy)
     elif args.cmd == "auto":
-        auto(args.goal, args.steps, args.config)
+        auto(args.goal, args.steps, args.config, args.policy)
     elif args.cmd == "serve":
         if args.telegram or args.discord:
             _serve_with_channels(args)
         else:
-            run_server(args.host, args.port, getattr(args, "config", "helloagi.json"))
+            run_server(args.host, args.port, getattr(args, "config", "helloagi.json"), args.policy)
     elif args.cmd == "doctor":
         doctor(args.config)
+    elif args.cmd == "update":
+        update_installation(args.package)
+    elif args.cmd == "uninstall":
+        uninstall_installation(args.yes)
     elif args.cmd == "orchestrate-demo":
         orchestrate_demo()
     elif args.cmd == "tri-loop":
@@ -626,11 +678,11 @@ def main():
     elif args.cmd == "replay-failure":
         replay_failure(args.config)
     elif args.cmd == "openclaw":
-        openclaw(args.prompt, args.config)
+        openclaw(args.prompt, args.config, args.policy)
     elif args.cmd == "tools":
         from agi_runtime.tools.registry import ToolRegistry, discover_builtin_tools
         discover_builtin_tools()
-        agent = HelloAGIAgent()
+        agent = HelloAGIAgent(policy_pack=args.policy)
         print(agent.get_tools_info())
     elif args.cmd == "skills":
         from agi_runtime.skills.manager import SkillManager
@@ -644,7 +696,7 @@ def main():
     elif args.cmd == "dashboard":
         from agi_runtime.diagnostics.dashboard import run_dashboard
         settings = load_settings(args.config)
-        agent = HelloAGIAgent(settings)
+        agent = HelloAGIAgent(settings, policy_pack=args.policy)
         run_dashboard(agent=agent)
 
 
