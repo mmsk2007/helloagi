@@ -27,7 +27,10 @@ from agi_runtime.governance.srg import SRGGovernor, GovernanceResult
 from agi_runtime.latency.ale import ALEngine
 from agi_runtime.memory.identity import IdentityEngine
 from agi_runtime.memory.principals import PrincipalProfileStore
-from agi_runtime.config.providers import resolve_provider_credential
+from agi_runtime.config.providers import (
+    provider_credential_usable_for_llm_backbone,
+    resolve_provider_credential,
+)
 from agi_runtime.config.settings import RuntimeSettings
 from agi_runtime.tools.registry import (
     ToolRegistry,
@@ -170,27 +173,36 @@ class HelloAGIAgent:
 
         anthropic_credential = resolve_provider_credential("anthropic")
         google_credential = resolve_provider_credential("google")
-        has_anthropic = _ANTHROPIC_AVAILABLE and anthropic_credential.configured
-        has_google_key = google_credential.configured
-        has_genai = False
-        if has_google_key:
-            import importlib.util
-            has_genai = importlib.util.find_spec("google.genai") is not None
+        import importlib.util
 
-        if has_anthropic:
+        has_genai = importlib.util.find_spec("google.genai") is not None
+
+        if pref == "auto":
+            anthropic_ok = (
+                _ANTHROPIC_AVAILABLE
+                and provider_credential_usable_for_llm_backbone("anthropic", anthropic_credential)
+            )
+            google_ok = (
+                provider_credential_usable_for_llm_backbone("google", google_credential) and has_genai
+            )
+        else:
+            anthropic_ok = _ANTHROPIC_AVAILABLE and anthropic_credential.configured
+            google_ok = google_credential.configured and has_genai
+
+        if anthropic_ok:
             self._claude = _anthropic_lib.Anthropic(api_key=anthropic_credential.secret)
-        if has_google_key and has_genai:
+        if google_ok:
             from google import genai
             self._gemini_client = genai.Client(api_key=google_credential.secret)
 
         if pref == "anthropic":
-            self._llm_provider = "anthropic" if has_anthropic else None
+            self._llm_provider = "anthropic" if anthropic_ok else None
         elif pref == "google":
-            self._llm_provider = "google" if (has_google_key and has_genai) else None
+            self._llm_provider = "google" if google_ok else None
         else:
-            if has_anthropic:
+            if anthropic_ok:
                 self._llm_provider = "anthropic"
-            elif has_google_key and has_genai:
+            elif google_ok:
                 self._llm_provider = "google"
             else:
                 self._llm_provider = None

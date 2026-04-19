@@ -107,13 +107,16 @@ def _check_provider_readiness(onboard: dict | None, *, env_path: str = ".env", a
         if providers.get(f"{provider}_api_key") or providers.get(f"{provider}_auth_token"):
             configured.append(provider)
     env_ready = sorted(provider for provider, state in env_snapshot.items() if state.get("configured"))
+    env_llm_usable = sorted(provider for provider, state in env_snapshot.items() if state.get("llm_usable"))
     available = sorted(set(configured) | set(env_ready))
     explicit_active_provider = providers.get("active_provider") if isinstance(providers, dict) else None
     active_provider = explicit_active_provider or "template"
     active_auth_mode = providers.get("active_auth_mode", "none") if isinstance(providers, dict) else "none"
     explicit_template = explicit_active_provider == "template"
-    if "anthropic" in env_ready:
+    if "anthropic" in env_llm_usable:
         runtime_backbone = "anthropic-ready"
+    elif "google" in env_llm_usable:
+        runtime_backbone = "google-ready"
     elif active_provider == "google" and "google" in env_ready:
         runtime_backbone = "google-ready"
     elif explicit_template:
@@ -127,6 +130,7 @@ def _check_provider_readiness(onboard: dict | None, *, env_path: str = ".env", a
         "available=" + (", ".join(available) if available else "none"),
         "configured=" + (", ".join(configured) if configured else "none"),
         "env=" + (", ".join(env_ready) if env_ready else "none"),
+        "env_llm=" + (", ".join(env_llm_usable) if env_llm_usable else "none"),
         f"active={active_provider}",
         f"auth_mode={active_auth_mode}",
         "runtime_backbone=" + runtime_backbone,

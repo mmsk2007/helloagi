@@ -783,7 +783,7 @@ def _serve_with_channels(args):
     if args.discord:
         requested_extensions.append("discord")
 
-    for channel in ExtensionManager().build_channels(agent, requested_extensions=requested_extensions):
+    for channel in ExtensionManager().build_channels(agent, requested_names=requested_extensions):
         router.register(channel)
         print(f"{channel.name} extension registered")
 

@@ -118,13 +118,16 @@ class TestScorecard(unittest.TestCase):
             onboard = Path(td) / "onboard.json"
             onboard.write_text(json.dumps({"providers": {}}))
 
-            with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}, clear=True):
+            # Length/shape must pass LLM-usable heuristics (short keys are treated as placeholders).
+            fake_anthropic = "sk-ant-api03-" + ("a" * 24)
+            with patch.dict("os.environ", {"ANTHROPIC_API_KEY": fake_anthropic}, clear=True):
                 rep = run_scorecard(config_path=str(cfg), onboard_path=str(onboard))
 
             provider_check = next(check for check in rep["checks"] if check["name"] == "providers")
             self.assertTrue(provider_check["ok"])
             self.assertIn("available=anthropic", provider_check["detail"])
             self.assertIn("runtime_backbone=anthropic-ready", provider_check["detail"])
+            self.assertIn("env_llm=anthropic", provider_check["detail"])
 
 
 if __name__ == '__main__':

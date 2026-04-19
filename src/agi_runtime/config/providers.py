@@ -24,6 +24,54 @@ PROVIDER_SECRET_ENV: dict[str, dict[str, list[str]]] = {
 
 RUNTIME_PROVIDERS = ("anthropic", "google")
 
+# Values that look like real keys but are docs/tests — ignored for automatic LLM selection.
+_ANTHROPIC_API_KEY_DENYLIST = frozenset(
+    {
+        "sk-ant-test",
+        "sk-ant-api03-test",
+    }
+)
+_PLACEHOLDER_FRAGMENTS = ("...", "your-api-key", "changeme", "replace-me", "xxx", "placeholder")
+
+
+def provider_credential_usable_for_llm_backbone(provider: str, credential: ProviderCredential) -> bool:
+    """True if this credential is non-empty and not an obvious doc/test placeholder.
+
+    Used for ``HELLOAGI_LLM_PROVIDER=auto`` so a leftover example Anthropic key
+    does not block Gemini (or vice versa) when another provider has a real key.
+    Explicit ``anthropic`` / ``google`` preferences still use ``.configured`` only.
+    """
+    if not credential.configured:
+        return False
+    secret = credential.secret.strip()
+    if not secret:
+        return False
+    low = secret.lower()
+    for frag in _PLACEHOLDER_FRAGMENTS:
+        if frag in low:
+            return False
+
+    if provider == "anthropic":
+        if secret in _ANTHROPIC_API_KEY_DENYLIST or low in _ANTHROPIC_API_KEY_DENYLIST:
+            return False
+        if credential.auth_mode == "api_key":
+            if not secret.startswith("sk-ant-"):
+                return len(secret) >= 32
+            return len(secret) >= 24
+        return len(secret) >= 20
+
+    if provider == "google":
+        if credential.auth_mode == "api_key":
+            return len(secret) >= 30
+        return len(secret) >= 20
+
+    if provider == "openai":
+        if credential.auth_mode == "api_key":
+            return len(secret) >= 20
+        return len(secret) >= 20
+
+    return len(secret) >= 16
+
 
 @dataclass(frozen=True)
 class ProviderCredential:
@@ -108,6 +156,7 @@ def provider_env_snapshot(*, env_path: str = ".env", auth_profiles_path: str = "
         credential = resolve_provider_credential(provider, env_path=env_path, auth_profiles_path=auth_profiles_path)
         provider_state = {
             "configured": credential.configured,
+            "llm_usable": provider_credential_usable_for_llm_backbone(provider, credential),
             "auth_mode": credential.auth_mode,
             "env_name": credential.env_name,
             "source": credential.source,
