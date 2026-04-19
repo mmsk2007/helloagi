@@ -19,6 +19,7 @@ class RuntimeSettings:
     default_policy_pack: str = "safe-default"
     default_model_tier: str = "balanced"
     runtime_mode: str = "hybrid"
+    preferred_timezone: str = ""
 
 
 def load_settings(path: str = "helloagi.json") -> RuntimeSettings:

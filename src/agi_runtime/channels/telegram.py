@@ -19,6 +19,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
+import uuid
 from typing import Optional
 
 from agi_runtime.channels.base import BaseChannel, ChannelMessage, ChannelResponse
@@ -40,12 +42,19 @@ def _load_telegram_token() -> str:
 class TelegramChannel(BaseChannel):
     """Telegram bot channel for HelloAGI."""
 
+    APPROVAL_TIMEOUT_S = 300.0
+
     def __init__(self, agent: HelloAGIAgent, token: Optional[str] = None):
         super().__init__("telegram")
         self.agent = agent
         self.token = token or _load_telegram_token()
         self._app = None
-        self._pending_approvals: dict = {}  # message_id -> callback
+        # approval_id -> (threading.Event, result_dict) — set by _handle_approval,
+        # awaited by the blocking on_user_input shim that runs in the think() thread.
+        self._pending_approvals: dict = {}
+        # user_id -> {"step": "awaiting_name" | "awaiting_tz", ...} for first-run flow.
+        self._wizard_state: dict = {}
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._reminder_service = ReminderService()
         self._reminder_ticker: ReminderTicker | None = None
 
@@ -120,6 +129,7 @@ class TelegramChannel(BaseChannel):
         logger.info("Telegram bot starting...")
         await self._app.initialize()
         await self._app.start()
+        self._loop = asyncio.get_running_loop()
         await self._app.updater.start_polling()
         await self.start_background_tasks()
         logger.info("Telegram bot started")
@@ -167,28 +177,92 @@ class TelegramChannel(BaseChannel):
     # ── Command Handlers ──────────────────────────────────────
 
     async def _cmd_start(self, update, context):
+        principal_id = self._principal_id_for_update(update)
+        state = self.agent.principals.get(principal_id)
+        if not state.onboarded:
+            await self._begin_wizard(update)
+            return
+        await self._send_welcome(update, state)
+
+    async def _send_welcome(self, update, state):
         name = self.agent.identity.state.name
         char = self.agent.identity.state.character
         tools_count = len(self.agent.tool_registry.list_tools())
+        greeting = f"Welcome back, {state.preferred_name}." if state.preferred_name else "Welcome back."
         await update.message.reply_text(
             f"🧠 HelloAGI - {name}\n"
             f"{char}\n\n"
-            f"I have {tools_count} tools at my disposal, governed by SRG safety.\n\n"
-            f"Commands:\n"
-            f"/tools — See my tools\n"
-            f"/skills — See learned skills\n"
-            f"/identity — Who am I\n"
-            f"/new — Fresh conversation\n"
-            f"/help — Help\n\n"
-            f"Reminder commands:\n"
-            f"/remind <schedule> | <message>\n"
-            f"/reminders\n"
-            f"/reminder_cancel <id>\n"
-            f"/reminder_pause <id>\n"
-            f"/reminder_resume <id>\n"
-            f"/reminder_run_now <id>\n\n"
-            f"Just send me a message and I'll get to work!",
+            f"{greeting} I have {tools_count} tools, governed by SRG safety.\n\n"
+            f"Core: /tools /skills /identity /new /help\n"
+            f"Reminders: /remind <schedule> | <message> /reminders\n"
+            f"            /reminder_cancel|pause|resume|run_now <id>\n\n"
+            f"Just send me a message and I'll get to work.",
         )
+
+    async def _begin_wizard(self, update):
+        user_id = str(update.effective_user.id)
+        self._wizard_state[user_id] = {"step": "awaiting_name"}
+        first_name = getattr(update.effective_user, "first_name", "") or ""
+        hint = f" (send '{first_name}' to use that)" if first_name else ""
+        await update.message.reply_text(
+            "👋 Hi, I'm HelloAGI — a governed autonomous agent.\n\n"
+            f"What should I call you?{hint}"
+        )
+
+    async def _continue_wizard(self, update, text: str) -> bool:
+        """Return True if the message was consumed by the wizard."""
+        user_id = str(update.effective_user.id)
+        principal_id = self._principal_id_for_update(update)
+        w = self._wizard_state.get(user_id)
+        if not w:
+            return False
+
+        step = w.get("step")
+        if step == "awaiting_name":
+            name = text.strip() or (getattr(update.effective_user, "first_name", "") or "")
+            if not name:
+                await update.message.reply_text("Give me a name or nickname I can use for you.")
+                return True
+            w["name"] = name
+            w["step"] = "awaiting_tz"
+            await update.message.reply_text(
+                f"Nice to meet you, {name}.\n\n"
+                "What's your IANA timezone? (e.g. Asia/Riyadh, Europe/London, America/New_York)\n"
+                "Reply 'skip' to use the server's local zone."
+            )
+            return True
+
+        if step == "awaiting_tz":
+            raw = text.strip()
+            tz_value = ""
+            if raw.lower() not in {"skip", "-", "none"}:
+                try:
+                    from zoneinfo import ZoneInfo
+                    ZoneInfo(raw)
+                    tz_value = raw
+                except Exception:
+                    await update.message.reply_text(
+                        f"'{raw}' isn't a valid IANA zone. Try e.g. Asia/Riyadh, or say 'skip'."
+                    )
+                    return True
+            self.agent.principals.update(
+                principal_id,
+                preferred_name=w.get("name", ""),
+                timezone=tz_value,
+                onboarded=True,
+            )
+            self._wizard_state.pop(user_id, None)
+            state = self.agent.principals.get(principal_id)
+            tz_note = f" Timezone: {tz_value}." if tz_value else " Using server-local time."
+            await update.message.reply_text(
+                f"✅ You're set up, {state.preferred_name}.{tz_note}\n\n"
+                "I'm time-aware and remember who you are across conversations. "
+                "High-risk actions will ask for your approval before running."
+            )
+            await self._send_welcome(update, state)
+            return True
+
+        return False
 
     async def _cmd_tools(self, update, context):
         info = self.agent.get_tools_info()
@@ -311,19 +385,22 @@ class TelegramChannel(BaseChannel):
         chat_id = str(update.effective_chat.id)
         text = update.message.text
 
+        principal_id = self._principal_id_for_update(update)
+        state = self.agent.principals.get(principal_id)
+
+        # First-run: route through the onboarding wizard until it completes.
+        if not state.onboarded:
+            if user_id not in self._wizard_state:
+                await self._begin_wizard(update)
+                return
+            consumed = await self._continue_wizard(update, text)
+            if consumed:
+                return
+
         # Show typing indicator
         await context.bot.send_chat_action(chat_id=int(chat_id), action="typing")
 
-        # Set up approval callback for SRG escalations
-        approval_future = None
-
-        def on_user_input(prompt):
-            """Handle SRG escalation approval via inline keyboard."""
-            nonlocal approval_future
-            # This would send an inline keyboard in a real implementation
-            # For now, auto-approve in Telegram (user already consented by messaging)
-            return "y"
-
+        on_user_input = self._build_approval_handler(chat_id=int(chat_id), context=context)
         original_input = self.agent.on_user_input
         self.agent.on_user_input = on_user_input
 
@@ -374,6 +451,62 @@ class TelegramChannel(BaseChannel):
         self.agent.set_principal(principal_id)
         return self.agent.think(text)
 
+    def _build_approval_handler(self, *, chat_id: int, context):
+        """Return a blocking on_user_input callback that surfaces SRG prompts to Telegram.
+
+        The agentic loop runs in a thread (see asyncio.to_thread); this callback
+        blocks that thread on a threading.Event while the asyncio loop drives
+        the inline-keyboard callback. Timeout defaults to APPROVAL_TIMEOUT_S and
+        a timeout is treated as deny.
+        """
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        loop = self._loop
+
+        def on_user_input(prompt: str) -> str:
+            if loop is None:
+                return "n"
+            approval_id = uuid.uuid4().hex[:8]
+            event = threading.Event()
+            result = {"answer": "n"}
+            self._pending_approvals[approval_id] = (event, result)
+
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Approve", callback_data=f"approve:{approval_id}"),
+                InlineKeyboardButton("❌ Deny", callback_data=f"deny:{approval_id}"),
+            ]])
+            preview = (prompt or "").strip()
+            if len(preview) > 3500:
+                preview = preview[:3500] + "…"
+            body = f"🟡 SRG approval needed:\n\n{preview}"
+
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    context.bot.send_message(chat_id=chat_id, text=body, reply_markup=keyboard),
+                    loop,
+                ).result(timeout=10.0)
+            except Exception as exc:
+                logger.warning("Telegram approval prompt failed to send: %s", exc)
+                self._pending_approvals.pop(approval_id, None)
+                return "n"
+
+            if not event.wait(timeout=self.APPROVAL_TIMEOUT_S):
+                self._pending_approvals.pop(approval_id, None)
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        context.bot.send_message(
+                            chat_id=chat_id,
+                            text="⌛ Approval timed out — treating as deny.",
+                        ),
+                        loop,
+                    ).result(timeout=5.0)
+                except Exception:
+                    pass
+                return "n"
+            return result["answer"]
+
+        return on_user_input
+
     async def _on_error(self, update, context):
         """Global PTB error handler to avoid noisy unhandled exceptions."""
         logger.exception("Telegram update error", exc_info=context.error)
@@ -388,14 +521,15 @@ class TelegramChannel(BaseChannel):
         query = update.callback_query
         await query.answer()
 
-        data = query.data
-        if data.startswith("approve:"):
-            msg_id = data.split(":")[1]
-            if msg_id in self._pending_approvals:
-                self._pending_approvals[msg_id]("y")
-                await query.edit_message_text("✅ Approved")
-        elif data.startswith("deny:"):
-            msg_id = data.split(":")[1]
-            if msg_id in self._pending_approvals:
-                self._pending_approvals[msg_id]("n")
-                await query.edit_message_text("❌ Denied")
+        data = query.data or ""
+        if ":" not in data:
+            return
+        op, approval_id = data.split(":", 1)
+        entry = self._pending_approvals.pop(approval_id, None)
+        if not entry:
+            await query.edit_message_text("(expired approval)")
+            return
+        event, result = entry
+        result["answer"] = "y" if op == "approve" else "n"
+        event.set()
+        await query.edit_message_text("✅ Approved" if op == "approve" else "❌ Denied")

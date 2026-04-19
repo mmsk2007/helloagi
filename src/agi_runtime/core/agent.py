@@ -45,6 +45,7 @@ from agi_runtime.memory.compressor import ContextCompressor
 from agi_runtime.robustness.circuit_breaker import CircuitBreaker
 from agi_runtime.supervisor.supervisor import Supervisor
 from agi_runtime.core.personality import GrowthTracker, build_personality_prompt, get_time_greeting
+from agi_runtime.core.time_context import build_time_context_block
 from agi_runtime.intelligence.sentiment import SentimentTracker
 from agi_runtime.intelligence.context_compiler import ContextCompiler
 from agi_runtime.intelligence.patterns import PatternDetector
@@ -259,6 +260,18 @@ class HelloAGIAgent:
             "- Use tools when they materially improve outcome quality or correctness.",
             "- Keep responses concise unless the user asks for depth.",
         ]
+
+        # Inject grounded time awareness (date, clock, timezone, UTC anchor).
+        # Per-principal tz overrides the runtime setting, which overrides host-local.
+        principal_state = self.principals.get(self.current_principal())
+        time_block = build_time_context_block(
+            principal_tz=getattr(principal_state, "timezone", "") or None,
+            settings_tz=getattr(self.settings, "preferred_timezone", "") or None,
+        )
+        parts.append("")
+        parts.append("<time-context>")
+        parts.append(time_block)
+        parts.append("</time-context>")
 
         # Inject personality and growth awareness
         personality = build_personality_prompt(

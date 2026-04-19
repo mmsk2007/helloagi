@@ -118,6 +118,7 @@ class WizardOptions:
     owner_name: str | None = None
     focus: str | None = None
     model_tier: str | None = None
+    timezone: str | None = None
 
 
 def _to_dict(cfg: OnboardConfig) -> dict:
@@ -566,9 +567,31 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     settings = load_settings("helloagi.json")
     agent_name = (options.agent_name or "").strip() or settings.identity_name or "Lana"
     owner_name = (options.owner_name or "").strip()
+
+    def _detect_host_tz() -> str:
+        try:
+            from datetime import datetime
+            tz = datetime.now().astimezone().tzinfo
+            key = getattr(tz, "key", None)
+            if key:
+                return key
+        except Exception:
+            pass
+        return ""
+
+    tz_default = (options.timezone or "").strip() or getattr(settings, "preferred_timezone", "") or _detect_host_tz()
+    user_timezone = tz_default
     if not options.non_interactive:
         agent_name = _prompt("Agent name", agent_name)
         owner_name = _prompt("What should the agent call you", owner_name)
+        user_timezone = _prompt("Your IANA timezone (e.g. Asia/Riyadh, Europe/London)", tz_default)
+        if user_timezone and user_timezone != tz_default:
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(user_timezone)
+            except Exception:
+                _warn(f"'{user_timezone}' is not a valid IANA zone — keeping host-local.")
+                user_timezone = tz_default
     print()
 
     _step(3, total_steps, "Runtime Profile")
@@ -773,6 +796,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     settings.default_policy_pack = pack_map.get(focus, "safe-default")
     settings.default_model_tier = model_tier
     settings.runtime_mode = runtime_mode
+    settings.preferred_timezone = user_timezone or ""
     save_settings(settings, "helloagi.json")
 
     Path("memory").mkdir(exist_ok=True)
@@ -781,7 +805,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     cfg = OnboardConfig(
         agent_name=agent_name,
         owner_name=owner_name,
-        timezone="UTC",
+        timezone=user_timezone or "UTC",
         default_model_tier=model_tier,
         focus=focus,
         providers=ProviderKeys(
