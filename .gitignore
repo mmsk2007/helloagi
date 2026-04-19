@@ -8,6 +8,8 @@ src/*.egg-info/
 .env.*
 helloagi.json
 memory/
+!src/agi_runtime/memory/
+!src/agi_runtime/memory/*.py
 
 docs/daily-research/
 helloagi.onboard.json
