@@ -388,29 +388,44 @@ class TelegramChannel(BaseChannel):
         principal_id = self._principal_id_for_update(update)
         state = self.agent.principals.get(principal_id)
 
+        preview = text.replace("\n", " ")
+        if len(preview) > 80:
+            preview = preview[:77] + "..."
+        logger.info("msg in  | pid=%s | %s", principal_id, preview)
+
         # First-run: route through the onboarding wizard until it completes.
         if not state.onboarded:
             if user_id not in self._wizard_state:
+                logger.info("wizard  | pid=%s | starting first-run flow", principal_id)
                 await self._begin_wizard(update)
                 return
             consumed = await self._continue_wizard(update, text)
             if consumed:
+                logger.info("wizard  | pid=%s | step=%s", principal_id, self._wizard_state.get(user_id, {}).get("step", "done"))
                 return
 
         # Show typing indicator
         await context.bot.send_chat_action(chat_id=int(chat_id), action="typing")
 
-        on_user_input = self._build_approval_handler(chat_id=int(chat_id), context=context)
+        on_user_input = self._build_approval_handler(
+            chat_id=int(chat_id), context=context, principal_id=principal_id
+        )
         original_input = self.agent.on_user_input
         self.agent.on_user_input = on_user_input
 
+        import time as _time
+        t0 = _time.monotonic()
         try:
-            principal_id = self._principal_id_for_update(update)
             # Run sync think() off the asyncio loop — calling think() directly blocks PTB's
             # event loop (think() uses future.result() when a loop is already running).
             r = await asyncio.wait_for(
                 asyncio.to_thread(self._think_for_principal, principal_id, text),
                 timeout=600.0,
+            )
+            logger.info(
+                "msg out | pid=%s | %s risk=%.2f tools=%d turns=%d chars=%d in %.1fs",
+                principal_id, r.decision, r.risk, r.tool_calls_made, r.turns_used, len(r.text or ""),
+                _time.monotonic() - t0,
             )
 
             show_gov = os.environ.get("HELLOAGI_TELEGRAM_SHOW_GOV", "0").strip().lower() in (
@@ -451,7 +466,7 @@ class TelegramChannel(BaseChannel):
         self.agent.set_principal(principal_id)
         return self.agent.think(text)
 
-    def _build_approval_handler(self, *, chat_id: int, context):
+    def _build_approval_handler(self, *, chat_id: int, context, principal_id: str = "telegram"):
         """Return a blocking on_user_input callback that surfaces SRG prompts to Telegram.
 
         The agentic loop runs in a thread (see asyncio.to_thread); this callback
@@ -490,8 +505,10 @@ class TelegramChannel(BaseChannel):
                 self._pending_approvals.pop(approval_id, None)
                 return "n"
 
+            logger.info("approval| pid=%s | id=%s awaiting user", principal_id, approval_id)
             if not event.wait(timeout=self.APPROVAL_TIMEOUT_S):
                 self._pending_approvals.pop(approval_id, None)
+                logger.info("approval| pid=%s | id=%s TIMEOUT -> deny", principal_id, approval_id)
                 try:
                     asyncio.run_coroutine_threadsafe(
                         context.bot.send_message(
@@ -503,6 +520,7 @@ class TelegramChannel(BaseChannel):
                 except Exception:
                     pass
                 return "n"
+            logger.info("approval| pid=%s | id=%s answer=%s", principal_id, approval_id, result["answer"])
             return result["answer"]
 
         return on_user_input

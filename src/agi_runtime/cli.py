@@ -766,11 +766,40 @@ def uninstall_installation(yes: bool = False):
     raise SystemExit(_run_pip_command(["uninstall", "-y", "helloagi"]))
 
 
+def _setup_serve_logging(verbose: int, quiet: bool) -> None:
+    """Attach a compact stderr log handler for `helloagi serve`.
+
+    verbose=0 → WARNING; verbose=1 → INFO; verbose>=2 → DEBUG. --quiet silences it.
+    Idempotent: if HELLOAGI_SERVE_LOG_INSTALLED is set, don't add a second handler.
+    """
+    import logging, os, sys
+    if os.environ.get("HELLOAGI_SERVE_LOG_INSTALLED") == "1":
+        return
+    if quiet:
+        level = logging.ERROR
+    elif verbose >= 2:
+        level = logging.DEBUG
+    elif verbose == 1:
+        level = logging.DEBUG
+    else:
+        level = logging.INFO
+    handler = logging.StreamHandler(stream=sys.stderr)
+    handler.setLevel(level)
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-5s %(name)s | %(message)s", datefmt="%H:%M:%S"))
+    root = logging.getLogger()
+    if root.level == logging.WARNING or root.level > level:
+        root.setLevel(level)
+    root.addHandler(handler)
+    os.environ["HELLOAGI_SERVE_LOG_INSTALLED"] = "1"
+
+
 def _serve_with_channels(args):
     """Start HTTP API with optional Telegram/Discord channels."""
     import asyncio
     from agi_runtime.core.agent import HelloAGIAgent
     from agi_runtime.extensions.manager import ExtensionManager
+
+    _setup_serve_logging(verbose=getattr(args, "verbose", 0), quiet=getattr(args, "quiet", False))
 
     settings = load_settings(args.config)
     agent = HelloAGIAgent(settings, policy_pack=args.policy)
@@ -862,6 +891,8 @@ def main():
     serverp.add_argument("--require-auth", action="store_true", help="require HELLOAGI_API_KEY for API access")
     serverp.add_argument("--config", default="helloagi.json")
     serverp.add_argument("--policy", default="safe-default")
+    serverp.add_argument("-v", "--verbose", action="count", default=0, help="increase log verbosity (-v, -vv)")
+    serverp.add_argument("-q", "--quiet", action="store_true", help="silence non-error log output")
 
     docp = sub.add_parser("doctor", help="check local runtime state")
     docp.add_argument("--config", default="helloagi.json")
