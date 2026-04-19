@@ -2,9 +2,11 @@ import subprocess
 import sys
 import unittest
 import os
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import agi_runtime.cli as cli_module
 from agi_runtime.core.agent import HelloAGIAgent
 from agi_runtime.channels.telegram import _load_telegram_token
 from agi_runtime.config.env import load_local_env, save_env_values
@@ -101,6 +103,48 @@ class TestCLIContract(unittest.TestCase):
         result = self.run_cli("serve", "--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--require-auth", result.stdout)
+
+    def test_setup_serve_logging_respects_documented_levels(self):
+        original_handlers = logging.root.handlers[:]
+        original_level = logging.root.level
+        old_marker = os.environ.pop("HELLOAGI_SERVE_LOG_INSTALLED", None)
+        try:
+            for handler in original_handlers:
+                logging.root.removeHandler(handler)
+
+            cli_module._setup_serve_logging(verbose=0, quiet=False)
+            self.assertEqual(logging.root.level, logging.WARNING)
+
+            for handler in logging.root.handlers[:]:
+                logging.root.removeHandler(handler)
+            os.environ.pop("HELLOAGI_SERVE_LOG_INSTALLED", None)
+
+            cli_module._setup_serve_logging(verbose=1, quiet=False)
+            self.assertEqual(logging.root.level, logging.INFO)
+
+            for handler in logging.root.handlers[:]:
+                logging.root.removeHandler(handler)
+            os.environ.pop("HELLOAGI_SERVE_LOG_INSTALLED", None)
+
+            cli_module._setup_serve_logging(verbose=2, quiet=False)
+            self.assertEqual(logging.root.level, logging.DEBUG)
+
+            for handler in logging.root.handlers[:]:
+                logging.root.removeHandler(handler)
+            os.environ.pop("HELLOAGI_SERVE_LOG_INSTALLED", None)
+
+            cli_module._setup_serve_logging(verbose=2, quiet=True)
+            self.assertEqual(logging.root.level, logging.ERROR)
+        finally:
+            for handler in logging.root.handlers[:]:
+                logging.root.removeHandler(handler)
+            for handler in original_handlers:
+                logging.root.addHandler(handler)
+            logging.root.setLevel(original_level)
+            if old_marker is None:
+                os.environ.pop("HELLOAGI_SERVE_LOG_INSTALLED", None)
+            else:
+                os.environ["HELLOAGI_SERVE_LOG_INSTALLED"] = old_marker
 
 
 if __name__ == "__main__":

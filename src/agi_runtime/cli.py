@@ -773,22 +773,21 @@ def _setup_serve_logging(verbose: int, quiet: bool) -> None:
     Idempotent: if HELLOAGI_SERVE_LOG_INSTALLED is set, don't add a second handler.
     """
     import logging, os, sys
-    if os.environ.get("HELLOAGI_SERVE_LOG_INSTALLED") == "1":
-        return
     if quiet:
         level = logging.ERROR
     elif verbose >= 2:
         level = logging.DEBUG
     elif verbose == 1:
-        level = logging.DEBUG
-    else:
         level = logging.INFO
+    else:
+        level = logging.WARNING
+    root = logging.getLogger()
+    root.setLevel(level)
+    if os.environ.get("HELLOAGI_SERVE_LOG_INSTALLED") == "1":
+        return
     handler = logging.StreamHandler(stream=sys.stderr)
     handler.setLevel(level)
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-5s %(name)s | %(message)s", datefmt="%H:%M:%S"))
-    root = logging.getLogger()
-    if root.level == logging.WARNING or root.level > level:
-        root.setLevel(level)
     root.addHandler(handler)
     os.environ["HELLOAGI_SERVE_LOG_INSTALLED"] = "1"
 
