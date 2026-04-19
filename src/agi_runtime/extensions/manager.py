@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from importlib import import_module
-from importlib.util import find_spec
 from pathlib import Path
 import json
 import os
 from typing import Any
 
 from agi_runtime.config.env import load_local_env
+from agi_runtime.utils.imports import module_available
 
 
 @dataclass(frozen=True)
@@ -139,7 +139,10 @@ class ExtensionManager:
         manifest = self.require(name)
         enabled = manifest.name in self.enabled_names()
         missing_env = [env_name for env_name in manifest.required_env if not os.environ.get(env_name)]
-        missing_modules = [module_name for module_name in manifest.python_modules if find_spec(module_name) is None]
+        missing_modules = [
+            module_name for module_name in manifest.python_modules
+            if not module_available(module_name)
+        ]
         available = not missing_env and not missing_modules
         notes: list[str] = []
         if missing_env:

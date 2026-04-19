@@ -44,6 +44,7 @@ from agi_runtime.skills.manager import SkillManager
 from agi_runtime.memory.compressor import ContextCompressor
 from agi_runtime.robustness.circuit_breaker import CircuitBreaker
 from agi_runtime.supervisor.supervisor import Supervisor
+from agi_runtime.utils.imports import module_available
 from agi_runtime.core.personality import GrowthTracker, build_personality_prompt, get_time_greeting
 from agi_runtime.intelligence.sentiment import SentimentTracker
 from agi_runtime.intelligence.context_compiler import ContextCompiler
@@ -173,9 +174,7 @@ class HelloAGIAgent:
 
         anthropic_credential = resolve_provider_credential("anthropic")
         google_credential = resolve_provider_credential("google")
-        import importlib.util
-
-        has_genai = importlib.util.find_spec("google.genai") is not None
+        has_genai = module_available("google.genai")
 
         if pref == "auto":
             anthropic_ok = (
