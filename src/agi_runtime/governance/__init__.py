@@ -10,14 +10,23 @@ Public surface:
   individual tool-call intents before execution.
 - :class:`OutputGuard` — output-side gate: scans tool outputs and agent
   text for secret leakage and phantom actions before emission.
+- :class:`MemoryGuard` — write-side gate: sanitizes or denies content
+  on its way into persistent memory; closes OWASP ASI06 (memory
+  poisoning) by refusing to store raw poisoned input verbatim.
 - :class:`PostureEngine` — derives a runtime :class:`Posture`
   (conservative / balanced / aggressive) per autonomous goal; posture
   scales thresholds, replan budget, and failure tolerance.
 
-Both gates are pure Python and deterministic by design. The whole point
-of the moat is that *no prompt can override Python*.
+All four gates are pure Python and deterministic by design. The whole
+point of the moat is that *no prompt can override Python*.
 """
 
+from agi_runtime.governance.memory_guard import (
+    MemoryDecision,
+    MemoryGuard,
+    MemoryGuardResult,
+    MemoryKind,
+)
 from agi_runtime.governance.output_guard import (
     OutputGuard,
     OutputGuardResult,
@@ -48,6 +57,11 @@ __all__ = [
     "OutputGuard",
     "OutputGuardResult",
     "PHANTOM_ACTION_PATTERNS",
+    # Memory guard
+    "MemoryGuard",
+    "MemoryGuardResult",
+    "MemoryDecision",
+    "MemoryKind",
     # Posture
     "PostureEngine",
     "Posture",

@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from agi_runtime.governance.memory_guard import MemoryGuard
 from agi_runtime.governance.srg import SRGGovernor, GovernanceResult
 from agi_runtime.latency.ale import ALEngine
 from agi_runtime.memory.identity import IdentityEngine
@@ -85,6 +86,7 @@ class HelloAGIAgent:
         self.policy_pack_name = policy_pack
         self.policy_pack = get_pack(policy_pack)
         self.governor = SRGGovernor(policy_pack=policy_pack)
+        self.memory_guard = MemoryGuard()
         self.ale = ALEngine()
         self.identity = IdentityEngine(
             path=self.settings.memory_path,
@@ -390,36 +392,80 @@ class HelloAGIAgent:
     # ── Auto Memory Store ──────────────────────────────────────
 
     def _auto_store_memory(self, user_input: str, response_text: str):
-        """Automatically extract and store key facts from the interaction."""
+        """Automatically extract and store key facts from the interaction.
+
+        Every write passes through ``MemoryGuard`` — this closes OWASP
+        Agentic Top 10 **ASI06 (Memory & Context Poisoning)**. Without
+        this gate, a user who got the agent to echo an injection phrase
+        ("ignore previous instructions …") would permanently embed that
+        text in the retrieval index and bias every future run.
+        """
         # Only store if the interaction was substantial
         if len(response_text) < 50 or len(user_input) < 10:
             return
 
+        # MemoryGuard pass — build the candidate summary, then sanitize or
+        # drop per the guard's verdict. The guard may deny outright, in
+        # which case we journal the denial and skip the write entirely.
+        raw_summary = (
+            f"User asked: {user_input[:200]}. "
+            f"Agent responded about: {response_text[:200]}"
+        )
+        guard_result = self.memory_guard.inspect(raw_summary, kind="interaction")
+        if guard_result.decision == "deny":
+            try:
+                self.journal.write("memory_guard_denied", {
+                    "kind": "interaction",
+                    "reasons": guard_result.reasons[:5],
+                    "signal_count": guard_result.signal_count,
+                })
+            except Exception:
+                pass
+            return
+        safe_summary = (
+            guard_result.sanitized_text
+            if guard_result.decision == "sanitize" and guard_result.sanitized_text
+            else raw_summary
+        )
+        if guard_result.decision == "sanitize":
+            try:
+                self.journal.write("memory_guard_sanitized", {
+                    "kind": "interaction",
+                    "reasons": guard_result.reasons[:5],
+                    "signal_count": guard_result.signal_count,
+                })
+            except Exception:
+                pass
+
         store = self.embedding_store
         principal_id = self.current_principal()
         if store and store.available:
-            # Store user preferences and key facts
+            # Store vetted summary only (per OWASP ASI06 mitigation).
             try:
-                # Store the core interaction as a memory
-                summary = f"User asked: {user_input[:200]}. Agent responded about: {response_text[:200]}"
                 store.add(
-                    summary,
-                    metadata={"category": "interaction", "ts": time.time()},
+                    safe_summary,
+                    metadata={
+                        "category": "interaction",
+                        "ts": time.time(),
+                        "guard_decision": guard_result.decision,
+                    },
                     principal_id=principal_id,
                 )
             except Exception:
                 pass
         else:
-            # Fallback: append to text file
+            # Fallback: append to text file — also sanitized. We never
+            # persist raw user input, even on this path.
             from pathlib import Path
             mem_file = Path("memory/facts.txt")
             mem_file.parent.mkdir(parents=True, exist_ok=True)
             try:
                 with mem_file.open("a", encoding="utf-8") as f:
                     prefix = f"[principal:{principal_id}] " if principal_id else ""
+                    # Clip the fallback line, and rely on `safe_summary`
+                    # having already been scrubbed by MemoryGuard.
                     f.write(
-                        f"{prefix}[interaction] User: {user_input[:100]} | "
-                        f"Response: {response_text[:100]}\n"
+                        f"{prefix}[interaction] {safe_summary[:200]}\n"
                     )
             except Exception:
                 pass
