@@ -3,6 +3,7 @@ __pycache__/
 _local_install/
 .venv/
 build/
+dist/
 src/*.egg-info/
 .env
 .env.*
