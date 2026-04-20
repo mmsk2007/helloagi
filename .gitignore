@@ -10,7 +10,7 @@ src/*.egg-info/
 .env
 .env.*
 helloagi.json
-memory/
+/memory/
 
 docs/daily-research/
 helloagi.onboard.json

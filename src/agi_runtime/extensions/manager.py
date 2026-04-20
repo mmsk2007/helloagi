@@ -11,6 +11,13 @@ from typing import Any
 from agi_runtime.config.env import load_local_env
 
 
+def _module_available(module_name: str) -> bool:
+    try:
+        return find_spec(module_name) is not None
+    except ModuleNotFoundError:
+        return False
+
+
 @dataclass(frozen=True)
 class ExtensionManifest:
     name: str
@@ -154,7 +161,7 @@ class ExtensionManager:
         manifest = self.require(name)
         enabled = manifest.name in self.enabled_names()
         missing_env = [env_name for env_name in manifest.required_env if not os.environ.get(env_name)]
-        missing_modules = [module_name for module_name in manifest.python_modules if find_spec(module_name) is None]
+        missing_modules = [module_name for module_name in manifest.python_modules if not _module_available(module_name)]
         notes: list[str] = []
         if manifest.name == "voice":
             from agi_runtime.channels.voice import probe_voice_runtime
