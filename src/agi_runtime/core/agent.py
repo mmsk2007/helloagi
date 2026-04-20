@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import importlib.util
 import json
 import os
 import time
@@ -56,6 +57,13 @@ try:
     _ANTHROPIC_AVAILABLE = True
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
+
+
+def _module_available(module_name: str) -> bool:
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except ModuleNotFoundError:
+        return False
 
 
 @dataclass
@@ -194,9 +202,7 @@ class HelloAGIAgent:
 
         anthropic_credential = resolve_provider_credential("anthropic")
         google_credential = resolve_provider_credential("google")
-        import importlib.util
-
-        has_genai = importlib.util.find_spec("google.genai") is not None
+        has_genai = _module_available("google.genai")
 
         if pref == "auto":
             anthropic_ok = (
