@@ -1,6 +1,16 @@
-from dataclasses import dataclass, asdict, fields
+from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
+from typing import Tuple
 import json
+
+
+_DEFAULT_OUTBOUND_EXTS: Tuple[str, ...] = (
+    "txt", "md", "pdf", "csv", "json", "log",
+    "png", "jpg", "jpeg", "gif", "webp",
+    "mp3", "ogg", "wav", "m4a",
+    "mp4", "mov", "webm",
+    "zip", "tar", "gz",
+)
 
 
 @dataclass
@@ -20,6 +30,12 @@ class RuntimeSettings:
     default_model_tier: str = "balanced"
     runtime_mode: str = "hybrid"
     preferred_timezone: str = ""
+    # Outbound file/attachment policy. Empty workspace → resolve to cwd at use time.
+    file_send_workspace: str = ""
+    max_outbound_file_bytes: int = 20 * 1024 * 1024
+    allowed_outbound_extensions: Tuple[str, ...] = field(
+        default_factory=lambda: _DEFAULT_OUTBOUND_EXTS
+    )
 
 
 def load_settings(path: str = "helloagi.json") -> RuntimeSettings:

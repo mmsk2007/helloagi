@@ -17,11 +17,14 @@ Setup:
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import logging
 import os
+import re
 import threading
 import uuid
-from typing import Optional
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from agi_runtime.channels.base import BaseChannel, ChannelMessage, ChannelResponse
 from agi_runtime.config.env import load_local_env
@@ -32,6 +35,9 @@ from agi_runtime.reminders.ticker import ReminderTicker
 
 logger = logging.getLogger("helloagi.telegram")
 
+_TG_TEXT_LIMIT = 4096
+_TG_CAPTION_LIMIT = 1024
+
 
 def _load_telegram_token() -> str:
     """Load Telegram token from env, falling back to local .env."""
@@ -39,10 +45,30 @@ def _load_telegram_token() -> str:
     return os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 
+def _markdownish_to_html(text: str) -> str:
+    """Convert the narrow markdown subset Claude tends to emit into Telegram HTML.
+
+    Telegram's HTML parser supports <b>, <i>, <code>, <pre>, <a>, <s>, <u>.
+    We escape first so raw '<', '>', '&' in the model output never become tags,
+    then layer code blocks → inline code → bold → italic. Underscores are left
+    alone because tool/file identifiers (web_fetch, file_path) collide with the
+    italic pattern.
+    """
+    if not text:
+        return ""
+    s = _html.escape(text, quote=False)
+    s = re.sub(r"```(.*?)```", lambda m: f"<pre>{m.group(1)}</pre>", s, flags=re.DOTALL)
+    s = re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+    s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s, flags=re.DOTALL)
+    s = re.sub(r"(?<![\*\w])\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", s)
+    return s
+
+
 class TelegramChannel(BaseChannel):
     """Telegram bot channel for HelloAGI."""
 
     APPROVAL_TIMEOUT_S = 300.0
+    capabilities = frozenset({"text", "file", "image", "voice"})
 
     def __init__(self, agent: HelloAGIAgent, token: Optional[str] = None):
         super().__init__("telegram")
@@ -150,9 +176,9 @@ class TelegramChannel(BaseChannel):
             return
 
         async def dispatch(job):
-            await self._app.bot.send_message(
-                chat_id=int(job.chat_id),
-                text=f"⏰ Reminder ({job.id}): {job.message}",
+            await self._send_text(
+                int(job.chat_id),
+                f"⏰ Reminder ({job.id}): {job.message}",
             )
 
         self._reminder_ticker = ReminderTicker(
@@ -167,12 +193,114 @@ class TelegramChannel(BaseChannel):
             self._reminder_ticker = None
 
     async def send(self, channel_id: str, text: str, **kwargs):
-        """Send a message to a Telegram chat."""
+        """Send a message to a Telegram chat with HTML-formatted markdown."""
         if self._app:
+            await self._send_text(int(channel_id), text)
+
+    async def _send_text(self, chat_id: int, text: str) -> None:
+        """Send text rendered as Telegram HTML, falling back to plain on parse error.
+
+        The model emits GFM markdown (**bold**, `code`, ```block```). Telegram's
+        default sender treats '*' literally so the user sees raw asterisks. We
+        escape + convert here. If Telegram rejects the markup (rare — usually a
+        regex edge case in user-typed content), we retry once as plain text.
+        """
+        if not self._app or not text:
+            return
+        body = text if len(text) <= _TG_TEXT_LIMIT else text[: _TG_TEXT_LIMIT - 16] + "\n\n…truncated"
+        try:
             await self._app.bot.send_message(
-                chat_id=int(channel_id),
-                text=text,
+                chat_id=chat_id,
+                text=_markdownish_to_html(body),
+                parse_mode="HTML",
             )
+        except Exception as exc:
+            logger.debug("HTML send failed (%s); retrying as plain text", exc)
+            try:
+                await self._app.bot.send_message(chat_id=chat_id, text=body)
+            except Exception:
+                logger.exception("Plain-text retry to chat %s also failed", chat_id)
+
+    # ── Outbound media (file/image/voice) ─────────────────────
+
+    async def send_file(
+        self,
+        channel_id: str,
+        path: str,
+        caption: str = "",
+        filename: str = "",
+    ) -> Dict[str, Any]:
+        if not self._app:
+            return {"ok": False, "message_id": None, "error": "telegram channel not started"}
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return {"ok": False, "message_id": None, "error": f"file not found: {path}"}
+        cap = (caption or "")[:_TG_CAPTION_LIMIT] or None
+        try:
+            with p.open("rb") as f:
+                msg = await self._app.bot.send_document(
+                    chat_id=int(channel_id),
+                    document=f,
+                    filename=filename or p.name,
+                    caption=cap,
+                )
+            return {"ok": True, "message_id": str(msg.message_id), "error": None}
+        except Exception as exc:
+            return {"ok": False, "message_id": None, "error": str(exc)}
+
+    async def send_image(
+        self,
+        channel_id: str,
+        path_or_url: str,
+        caption: str = "",
+    ) -> Dict[str, Any]:
+        if not self._app:
+            return {"ok": False, "message_id": None, "error": "telegram channel not started"}
+        cap = (caption or "")[:_TG_CAPTION_LIMIT] or None
+        is_url = path_or_url.lower().startswith(("http://", "https://"))
+        try:
+            if is_url:
+                msg = await self._app.bot.send_photo(
+                    chat_id=int(channel_id),
+                    photo=path_or_url,
+                    caption=cap,
+                )
+            else:
+                p = Path(path_or_url)
+                if not p.exists() or not p.is_file():
+                    return {"ok": False, "message_id": None, "error": f"file not found: {path_or_url}"}
+                with p.open("rb") as f:
+                    msg = await self._app.bot.send_photo(
+                        chat_id=int(channel_id),
+                        photo=f,
+                        caption=cap,
+                    )
+            return {"ok": True, "message_id": str(msg.message_id), "error": None}
+        except Exception as exc:
+            return {"ok": False, "message_id": None, "error": str(exc)}
+
+    async def send_voice(
+        self,
+        channel_id: str,
+        path: str,
+        caption: str = "",
+    ) -> Dict[str, Any]:
+        if not self._app:
+            return {"ok": False, "message_id": None, "error": "telegram channel not started"}
+        p = Path(path)
+        if not p.exists() or not p.is_file():
+            return {"ok": False, "message_id": None, "error": f"file not found: {path}"}
+        cap = (caption or "")[:_TG_CAPTION_LIMIT] or None
+        try:
+            with p.open("rb") as f:
+                msg = await self._app.bot.send_voice(
+                    chat_id=int(channel_id),
+                    voice=f,
+                    caption=cap,
+                )
+            return {"ok": True, "message_id": str(msg.message_id), "error": None}
+        except Exception as exc:
+            return {"ok": False, "message_id": None, "error": str(exc)}
 
     # ── Command Handlers ──────────────────────────────────────
 
@@ -446,9 +574,18 @@ class TelegramChannel(BaseChannel):
             if len(response_text) > 4000:
                 response_text = response_text[:4000] + "\n\n...truncated"
 
-            # Agent text includes arbitrary tool names (underscores) and paths; legacy
-            # Markdown breaks on unpaired "_" (e.g. web_fetch). Send as plain text.
-            await update.message.reply_text(response_text)
+            # Render the narrow markdown subset Claude emits (**bold**, `code`,
+            # ```block```) as Telegram HTML so users see formatting instead of
+            # literal asterisks. Underscores stay literal — tool/file names like
+            # web_fetch and file_path would otherwise become italics.
+            try:
+                await update.message.reply_text(
+                    _markdownish_to_html(response_text),
+                    parse_mode="HTML",
+                )
+            except Exception as exc:
+                logger.debug("HTML reply failed (%s); retrying as plain text", exc)
+                await update.message.reply_text(response_text)
 
         except asyncio.TimeoutError:
             logger.warning("Telegram handler: think() exceeded 600s")
@@ -464,7 +601,23 @@ class TelegramChannel(BaseChannel):
 
     def _think_for_principal(self, principal_id: str, text: str):
         self.agent.set_principal(principal_id)
-        return self.agent.think(text)
+        # Bind this Telegram chat as the active outbound channel so tools like
+        # send_file deliver attachments back to the same conversation. The
+        # principal_id format is "telegram:dm:{user_id}" or
+        # "telegram:group:{chat_id}:user:{user_id}" — extract the chat id
+        # accordingly so groups stay routed to the room, not the user's DM.
+        chat_id: Optional[str] = None
+        parts = principal_id.split(":")
+        if len(parts) >= 3 and parts[0] == "telegram":
+            if parts[1] == "dm":
+                chat_id = parts[2]
+            elif parts[1] == "group" and len(parts) >= 3:
+                chat_id = parts[2]
+        self.agent.set_active_channel(self, chat_id)
+        try:
+            return self.agent.think(text)
+        finally:
+            self.agent.set_active_channel(None, None)
 
     def _build_approval_handler(self, *, chat_id: int, context, principal_id: str = "telegram"):
         """Return a blocking on_user_input callback that surfaces SRG prompts to Telegram.

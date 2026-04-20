@@ -89,7 +89,7 @@ class HelloAGIAgent:
         self.settings = settings or RuntimeSettings()
         self.policy_pack_name = policy_pack
         self.policy_pack = get_pack(policy_pack)
-        self.governor = SRGGovernor(policy_pack=policy_pack)
+        self.governor = SRGGovernor(policy_pack=policy_pack, settings=self.settings)
         self.memory_guard = MemoryGuard()
         self.ale = ALEngine()
         self.identity = IdentityEngine(
@@ -137,6 +137,14 @@ class HelloAGIAgent:
         self.on_tool_start: Optional[Callable] = None
         self.on_tool_end: Optional[Callable] = None
 
+        # Active channel context: set by the channel layer (e.g. TelegramChannel)
+        # immediately before think() so outbound tools (send_file, send_image)
+        # can route attachments back through the same channel/chat the user
+        # spoke from. Stays None for CLI/API callers, which makes those tools
+        # gracefully degrade to "share path with user" text.
+        self._active_channel: Any = None
+        self._active_channel_id: Optional[str] = None
+
     def set_principal(self, principal_id: str) -> None:
         """Set active conversation principal for this execution context."""
         pid = (principal_id or "local:default").strip() or "local:default"
@@ -145,6 +153,14 @@ class HelloAGIAgent:
     def current_principal(self) -> str:
         """Return the active conversation principal id."""
         return self._principal_ctx.get()
+
+    def set_active_channel(self, channel: Any, channel_id: Optional[str]) -> None:
+        """Bind the channel that originated the current turn so outbound tools
+        (send_file, send_image) can deliver attachments back to the same chat.
+        Pass channel=None, channel_id=None to clear.
+        """
+        self._active_channel = channel
+        self._active_channel_id = channel_id
 
     @property
     def _history(self) -> List[dict]:
@@ -965,7 +981,10 @@ class HelloAGIAgent:
             return AgentResponse(text=text, decision=gov.decision, risk=gov.risk)
 
         gemini_tool = claude_tools_to_gemini_tool(tools)
-        model_id = route_gemini_model(user_input).model
+        model_id = route_gemini_model(
+            user_input,
+            default_tier=getattr(self.settings, "default_model_tier", "balanced"),
+        ).model
         config = build_generate_config(
             system_instruction=system_prompt,
             gemini_tool=gemini_tool,
@@ -1177,8 +1196,18 @@ class HelloAGIAgent:
     # ── Helpers ────────────────────────────────────────────────
 
     async def _execute_tool(self, tool_name: str, tool_input: dict) -> ToolResult:
-        """Execute a tool with principal-aware context for memory scoping."""
-        token = set_tool_context(principal_id=self.current_principal())
+        """Execute a tool with principal- and channel-aware context.
+
+        principal_id scopes memory; channel/channel_id let outbound tools
+        (send_file, send_image) deliver back through the same chat the user
+        spoke from. Channel is None for CLI/API turns and tools must degrade
+        gracefully in that case.
+        """
+        token = set_tool_context(
+            principal_id=self.current_principal(),
+            channel=self._active_channel,
+            channel_id=self._active_channel_id,
+        )
         try:
             return await self.tool_registry.execute(tool_name, tool_input)
         finally:
