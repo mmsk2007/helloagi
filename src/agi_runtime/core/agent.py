@@ -361,7 +361,10 @@ class HelloAGIAgent:
         google_credential = resolve_provider_credential("google")
         import importlib.util
 
-        has_genai = importlib.util.find_spec("google.genai") is not None
+        try:
+            has_genai = importlib.util.find_spec("google.genai") is not None
+        except ModuleNotFoundError:
+            has_genai = False
 
         if pref == "auto":
             anthropic_ok = (
