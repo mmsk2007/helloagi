@@ -22,6 +22,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from agi_runtime._imports import module_available
 from agi_runtime.governance.memory_guard import MemoryGuard
 from agi_runtime.governance.srg import SRGGovernor, GovernanceResult
 from agi_runtime.latency.ale import ALEngine
@@ -190,9 +191,7 @@ class HelloAGIAgent:
 
         anthropic_credential = resolve_provider_credential("anthropic")
         google_credential = resolve_provider_credential("google")
-        import importlib.util
-
-        has_genai = importlib.util.find_spec("google.genai") is not None
+        has_genai = module_available("google.genai")
 
         if pref == "auto":
             anthropic_ok = (

@@ -2,12 +2,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from importlib import import_module
-from importlib.util import find_spec
 from pathlib import Path
 import json
 import os
 from typing import Any
 
+from agi_runtime._imports import module_available
 from agi_runtime.config.env import load_local_env
 
 
@@ -154,7 +154,9 @@ class ExtensionManager:
         manifest = self.require(name)
         enabled = manifest.name in self.enabled_names()
         missing_env = [env_name for env_name in manifest.required_env if not os.environ.get(env_name)]
-        missing_modules = [module_name for module_name in manifest.python_modules if find_spec(module_name) is None]
+        missing_modules = [
+            module_name for module_name in manifest.python_modules if not module_available(module_name)
+        ]
         notes: list[str] = []
         if manifest.name == "voice":
             from agi_runtime.channels.voice import probe_voice_runtime
