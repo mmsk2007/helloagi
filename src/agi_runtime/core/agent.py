@@ -154,6 +154,10 @@ class HelloAGIAgent:
         """Return the active conversation principal id."""
         return self._principal_ctx.get()
 
+    def current_profile_principal(self) -> str:
+        """Return the canonical profile principal for memory and preferences."""
+        return self.principals.resolve_profile_id(self.current_principal())
+
     def set_active_channel(self, channel: Any, channel_id: Optional[str]) -> None:
         """Bind the channel that originated the current turn so outbound tools
         (send_file, send_image) can deliver attachments back to the same chat.
@@ -279,7 +283,7 @@ class HelloAGIAgent:
 
         # Inject grounded time awareness (date, clock, timezone, UTC anchor).
         # Per-principal tz overrides the runtime setting, which overrides host-local.
-        principal_state = self.principals.get(self.current_principal())
+        principal_state = self.principals.get(self.current_profile_principal())
         time_block = build_time_context_block(
             principal_tz=getattr(principal_state, "timezone", "") or None,
             settings_tz=getattr(self.settings, "preferred_timezone", "") or None,
@@ -376,7 +380,7 @@ class HelloAGIAgent:
         if not store or not store.available or store.count() == 0:
             # Fallback: check text-based memory file
             return self._get_file_memory_context()
-        principal_id = self.current_principal()
+        principal_id = self.current_profile_principal()
         memory_scope = os.environ.get("HELLOAGI_MEMORY_SCOPE", "compat")
 
         try:
@@ -414,7 +418,7 @@ class HelloAGIAgent:
             try:
                 lines = mem_file.read_text(encoding="utf-8").splitlines()
                 if lines:
-                    principal_id = self.current_principal()
+                    principal_id = self.current_profile_principal()
                     scope = os.environ.get("HELLOAGI_MEMORY_SCOPE", "compat").strip().lower()
                     if principal_id:
                         tag = f"[principal:{principal_id}]"
@@ -479,7 +483,7 @@ class HelloAGIAgent:
                 pass
 
         store = self.embedding_store
-        principal_id = self.current_principal()
+        principal_id = self.current_profile_principal()
         if store and store.available:
             # Store vetted summary only (per OWASP ASI06 mitigation).
             try:
@@ -633,9 +637,10 @@ class HelloAGIAgent:
     async def _think_async(self, user_input: str) -> AgentResponse:
         """The full agentic loop — the beating heart of HelloAGI."""
         principal_id = self.current_principal()
-        self.principals.record_user_message(principal_id, user_input)
-        bootstrap_instruction = self.principals.bootstrap_instruction(principal_id)
-        profile_excerpt = self.principals.profile_excerpt(principal_id)
+        profile_principal_id = self.current_profile_principal()
+        self.principals.record_user_message(profile_principal_id, user_input)
+        bootstrap_instruction = self.principals.bootstrap_instruction(profile_principal_id)
+        profile_excerpt = self.principals.profile_excerpt(profile_principal_id)
 
         # 0. Track growth & detect mood
         self.growth.record_session()
@@ -644,7 +649,14 @@ class HelloAGIAgent:
 
         # 1. Evolve identity based on observation
         self.identity.evolve(user_input)
-        self.journal.write("input", {"text": user_input, "principal_id": principal_id})
+        self.journal.write(
+            "input",
+            {
+                "text": user_input,
+                "principal_id": principal_id,
+                "profile_principal_id": profile_principal_id,
+            },
+        )
 
         # 2. SRG governance gate on user input
         gov = self.governor.evaluate(user_input)
@@ -1205,6 +1217,7 @@ class HelloAGIAgent:
         """
         token = set_tool_context(
             principal_id=self.current_principal(),
+            memory_principal_id=self.current_profile_principal(),
             channel=self._active_channel,
             channel_id=self._active_channel_id,
         )

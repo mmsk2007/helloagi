@@ -1160,6 +1160,12 @@ class VoiceChannel(BaseChannel):
         explicit = _env_text("HELLOAGI_OWNER_NAME", "")
         if explicit:
             return explicit
+        try:
+            preferred = self.agent.principals.get(self.principal_id).preferred_name
+        except Exception:
+            preferred = ""
+        if preferred:
+            return preferred.strip()
         onboard = Path("helloagi.onboard.json")
         if onboard.exists():
             try:

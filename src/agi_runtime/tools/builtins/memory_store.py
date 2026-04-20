@@ -23,7 +23,7 @@ def memory_store(content: str, category: str = "fact") -> ToolResult:
 
     store = GeminiEmbeddingStore()
 
-    principal_id = get_tool_context_value("principal_id")
+    principal_id = get_tool_context_value("memory_principal_id") or get_tool_context_value("principal_id")
     if store.available:
         success = store.add(
             content,

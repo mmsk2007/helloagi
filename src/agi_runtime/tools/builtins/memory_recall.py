@@ -25,7 +25,7 @@ def memory_recall(query: str, top_k: int = 5) -> ToolResult:
 
     store = GeminiEmbeddingStore()
 
-    principal_id = get_tool_context_value("principal_id")
+    principal_id = get_tool_context_value("memory_principal_id") or get_tool_context_value("principal_id")
     scope = os.environ.get("HELLOAGI_MEMORY_SCOPE", "compat")
     if store.available and store.count() > 0:
         results = store.search(
