@@ -91,7 +91,15 @@ def _normalize_voice_output_provider(raw: str | None) -> str:
     if provider == "auto":
         return _VOICE_OUTPUT_LOCAL
     if provider in {"gemini", "gemini_tts", "google", "google_tts"}:
-        return _VOICE_OUTPUT_GEMINI_TTS if resolve_provider_credential("google").configured else _VOICE_OUTPUT_LOCAL
+        if not resolve_provider_credential("google").configured:
+            raise RuntimeError(
+                "HELLOAGI_VOICE_OUTPUT_PROVIDER=gemini_tts was requested but Google "
+                "credentials are not configured. Set GOOGLE_API_KEY (or "
+                "GOOGLE_AUTH_TOKEN) in your environment or .env, or set "
+                "HELLOAGI_VOICE_OUTPUT_PROVIDER=auto to fall back to the local "
+                "system voice."
+            )
+        return _VOICE_OUTPUT_GEMINI_TTS
     if provider in {"local", "system", "native"}:
         return _VOICE_OUTPUT_LOCAL
     return _VOICE_OUTPUT_LOCAL
@@ -102,6 +110,14 @@ def _normalize_voice_input_provider(raw: str | None) -> str:
     if provider == "auto":
         return _VOICE_INPUT_LOCAL
     if provider in {"gemini", "gemini_live", "google_live", "live"}:
+        if not resolve_provider_credential("google").configured:
+            raise RuntimeError(
+                "HELLOAGI_VOICE_INPUT_PROVIDER=gemini_live was requested but "
+                "Google credentials are not configured. Set GOOGLE_API_KEY (or "
+                "GOOGLE_AUTH_TOKEN) in your environment or .env, or set "
+                "HELLOAGI_VOICE_INPUT_PROVIDER=auto to fall back to the local "
+                "system recognizer."
+            )
         return _VOICE_INPUT_GEMINI_LIVE
     if provider in {"local", "system", "native"}:
         return _VOICE_INPUT_LOCAL
@@ -143,10 +159,21 @@ def probe_voice_runtime() -> dict[str, Any]:
     """Report voice backend readiness without importing heavy runtime deps."""
     load_local_env()
     backend = _normalize_audio_backend(os.environ.get("HELLOAGI_VOICE_AUDIO_BACKEND"))
-    input_provider = _normalize_voice_input_provider(os.environ.get("HELLOAGI_VOICE_INPUT_PROVIDER"))
     missing_modules: list[str] = []
     notes: list[str] = []
-    output_provider = _normalize_voice_output_provider(os.environ.get("HELLOAGI_VOICE_OUTPUT_PROVIDER"))
+    try:
+        input_provider = _normalize_voice_input_provider(os.environ.get("HELLOAGI_VOICE_INPUT_PROVIDER"))
+    except RuntimeError as exc:
+        input_provider = _VOICE_INPUT_LOCAL
+        missing_modules.append("google_credentials")
+        notes.append(str(exc))
+    try:
+        output_provider = _normalize_voice_output_provider(os.environ.get("HELLOAGI_VOICE_OUTPUT_PROVIDER"))
+    except RuntimeError as exc:
+        output_provider = _VOICE_OUTPUT_LOCAL
+        if "google_credentials" not in missing_modules:
+            missing_modules.append("google_credentials")
+        notes.append(str(exc))
 
     if backend == _AUDIO_BACKEND_WINDOWS:
         if not _is_windows():
@@ -197,6 +224,20 @@ def _windows_tts_rate(raw_rate: int) -> int:
     # System.Speech uses -10..10 while pyttsx3-style configs tend to be 120..220.
     scaled = round((raw_rate - 185) / 8)
     return max(-10, min(10, scaled))
+
+
+_ECHO_STOPWORDS = frozenset(
+    {"the", "a", "an", "is", "am", "are", "to", "of", "for", "and", "or", "it", "i", "you",
+     "me", "my", "your", "we", "on", "in", "at", "so", "that", "this", "with", "as", "do",
+     "does", "did", "be", "been", "just", "can", "will", "would", "could", "should", "let"}
+)
+
+
+def _tokenize_for_echo(text: str) -> set[str]:
+    if not text:
+        return set()
+    tokens = re.findall(r"[a-zA-Z']{3,}", text.lower())
+    return {t for t in tokens if t not in _ECHO_STOPWORDS}
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -272,6 +313,10 @@ class VoiceChannel(BaseChannel):
         self.gemini_tts_model = _env_text("HELLOAGI_VOICE_GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview")
         self.gemini_tts_voice = _env_text("HELLOAGI_VOICE_GEMINI_TTS_VOICE", "Kore")
         self.gemini_tts_style = _env_text("HELLOAGI_VOICE_GEMINI_TTS_STYLE", "")
+        self.gemini_live_cooldown_seconds = max(
+            _env_float("HELLOAGI_VOICE_GEMINI_LIVE_COOLDOWN_SECONDS", 180.0),
+            0.0,
+        )
         self.work_sound = _env_text("HELLOAGI_VOICE_WORK_SOUND", "piano").lower()
         self.command_silence_seconds = _env_float("HELLOAGI_VOICE_COMMAND_SILENCE_SECONDS", 1.2)
         self.command_rms_threshold = _env_int("HELLOAGI_VOICE_COMMAND_RMS_THRESHOLD", 220)
@@ -292,6 +337,21 @@ class VoiceChannel(BaseChannel):
         self.ack_style = _env_text("HELLOAGI_VOICE_ACK_STYLE", "beep").lower()
         if self.ack_style not in {"beep", "speak", "off"}:
             self.ack_style = "beep"
+        # "Sure, I'm on it" spoken before thinking. Off by default in conversation mode
+        # because the echo bleeds into the follow-up mic and confuses the agent.
+        speak_ack_raw = _env_text("HELLOAGI_VOICE_SPEAK_ACK", "").lower()
+        if speak_ack_raw in {"on", "1", "true", "yes"}:
+            self.speak_ack_enabled = True
+        elif speak_ack_raw in {"off", "0", "false", "no"}:
+            self.speak_ack_enabled = False
+        else:
+            self.speak_ack_enabled = not self.conversation_mode
+        # Short silence after TTS finishes before opening the mic, so the room echo
+        # of our own voice does not get captured as a new user utterance.
+        self.post_speak_quiet_seconds = max(
+            _env_float("HELLOAGI_VOICE_POST_SPEAK_QUIET_MS", 600.0) / 1000.0, 0.0
+        )
+        self._last_spoken_texts: collections.deque[str] = collections.deque(maxlen=3)
         self.owner_name = self._resolve_owner_name()
         self._engine = None
         self._sr = None
@@ -311,6 +371,7 @@ class VoiceChannel(BaseChannel):
         self._barge_in_detected = threading.Event()
         self._live_loop: asyncio.AbstractEventLoop | None = None
         self._live_loop_thread: threading.Thread | None = None
+        self._gemini_live_cooldown_until = 0.0
         self._publish_presence("inactive", "waiting to start", active=False)
 
     async def start(self):
@@ -415,6 +476,9 @@ class VoiceChannel(BaseChannel):
                 break
             if not command:
                 continue
+            if self._looks_like_self_echo(command):
+                self._println(f"[voice] ignored self-echo | {command}")
+                continue
             if self._should_stop(command):
                 await asyncio.to_thread(self.speak, "Voice channel sleeping.", False)
                 break
@@ -442,6 +506,29 @@ class VoiceChannel(BaseChannel):
             return
         self._publish_presence("idle", f"say '{self.wake_word}'", active=True)
         self._render_status("idle", f"say '{self.wake_word}'")
+
+    def _looks_like_self_echo(self, transcript: str) -> bool:
+        """Return True when the captured transcript is likely our own TTS echo.
+
+        Uses a token-overlap heuristic against the last few spoken utterances so
+        we don't treat the speaker leaking into the mic as a new user command.
+        """
+        if not transcript or not self._last_spoken_texts:
+            return False
+        heard = _tokenize_for_echo(transcript)
+        if not heard:
+            return False
+        for spoken in self._last_spoken_texts:
+            spoken_tokens = _tokenize_for_echo(spoken)
+            if not spoken_tokens:
+                continue
+            overlap = heard & spoken_tokens
+            if not overlap:
+                continue
+            ratio = len(overlap) / max(len(heard), 1)
+            if ratio >= 0.6:
+                return True
+        return False
 
     def _stream_speak(self, text: str) -> None:
         """Speak a long response as sentence chunks so first-sound latency drops."""
@@ -504,7 +591,8 @@ class VoiceChannel(BaseChannel):
         self.agent.on_user_input = self._voice_approval_prompt
         self.agent.on_tool_start = self._voice_tool_start
         self.agent.on_tool_end = self._voice_tool_end
-        self._speak_progress(self._compose_acknowledgement(command), style_hint="ack", force=True)
+        if self.speak_ack_enabled:
+            self._speak_progress(self._compose_acknowledgement(command), style_hint="ack", force=True)
         self._start_work_sound()
         try:
             self.agent.set_principal(self.principal_id)
@@ -581,6 +669,27 @@ class VoiceChannel(BaseChannel):
         return transcript.strip() if transcript else None
 
     def _listen_once(self, *, label: str, timeout: float, phrase_time_limit: float) -> str | None:
+        deadline = time.monotonic() + max(timeout, 0.1)
+        while self._running:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self._publish_presence("idle", f"say '{self.wake_word}'", active=True)
+                return None
+            transcript = self._listen_once_raw(
+                label=label,
+                timeout=remaining,
+                phrase_time_limit=phrase_time_limit,
+            )
+            if not transcript:
+                return None
+            cleaned = transcript.strip()
+            if self._looks_like_self_echo(cleaned):
+                self._println(f"[voice] ignored self-echo | {cleaned}")
+                continue
+            return cleaned
+        return None
+
+    def _listen_once_raw(self, *, label: str, timeout: float, phrase_time_limit: float) -> str | None:
         self._ensure_audio_stack()
 
         if self.voice_input_provider == _VOICE_INPUT_GEMINI_LIVE:
@@ -600,10 +709,11 @@ class VoiceChannel(BaseChannel):
                 self._publish_presence("idle", f"say '{self.wake_word}'", active=True)
                 return None
             try:
-                self._publish_presence("transcribing", "gemini_live", active=True, error="")
+                transcribe_detail = "gemini fallback" if self._gemini_live_is_cooling_down() else "gemini live"
+                self._publish_presence("transcribing", transcribe_detail, active=True, error="")
                 transcript = self._with_spinner(
                     "transcribing",
-                    "gemini live",
+                    transcribe_detail,
                     lambda: self._transcribe_pcm_with_gemini_live(
                         pcm,
                         sample_rate=self.command_sample_rate,
@@ -1109,6 +1219,19 @@ class VoiceChannel(BaseChannel):
         self._live_loop_thread = thread
         return self._live_loop
 
+    def _gemini_live_is_cooling_down(self) -> bool:
+        return self._gemini_live_cooldown_until > time.monotonic()
+
+    def _enter_gemini_live_cooldown(self, exc: Exception) -> None:
+        if self.gemini_live_cooldown_seconds <= 0:
+            return
+        self._gemini_live_cooldown_until = time.monotonic() + self.gemini_live_cooldown_seconds
+        logger.warning(
+            "Gemini Live input cooling down for %.0fs after failure: %s",
+            self.gemini_live_cooldown_seconds,
+            exc,
+        )
+
     def _transcribe_pcm_with_gemini_live(
         self,
         pcm: bytes,
@@ -1119,14 +1242,21 @@ class VoiceChannel(BaseChannel):
         if not pcm:
             return ""
         sample_rate = sample_rate or self.command_sample_rate
+        if self._gemini_live_is_cooling_down():
+            return self._transcribe_pcm_with_gemini_model(pcm, sample_rate=sample_rate)
         try:
             loop = self._ensure_live_loop()
             future = asyncio.run_coroutine_threadsafe(
                 self._transcribe_pcm_with_gemini_live_async(pcm, sample_rate=sample_rate),
                 loop,
             )
-            return future.result(timeout=timeout)
+            transcript = future.result(timeout=timeout)
+            if transcript:
+                self._gemini_live_cooldown_until = 0.0
+                return transcript
+            raise RuntimeError("Gemini Live returned no transcript.")
         except Exception as exc:
+            self._enter_gemini_live_cooldown(exc)
             logger.warning("Gemini Live input failed; falling back to Gemini audio understanding: %s", exc)
             return self._transcribe_pcm_with_gemini_model(pcm, sample_rate=sample_rate)
 
@@ -1441,6 +1571,9 @@ class VoiceChannel(BaseChannel):
                 self._publish_presence("error", str(exc), active=True, last_spoken=spoken, error=str(exc))
                 self._println(f"[voice] speaker unavailable | {exc}")
                 return ""
+        self._last_spoken_texts.append(spoken)
+        if self.post_speak_quiet_seconds > 0:
+            time.sleep(self.post_speak_quiet_seconds)
         if not idle_after:
             next_detail = detail or "working..."
             self._publish_presence(state, next_detail, active=True, last_spoken=spoken, error="")

@@ -1,6 +1,7 @@
 import os
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from agi_runtime.channels.voice import (
     VoiceChannel,
@@ -47,7 +48,10 @@ class TestVoiceChannel(unittest.TestCase):
 
     def test_voice_input_provider_can_be_forced_gemini_live(self):
         with patch.dict(os.environ, {"HELLOAGI_VOICE_INPUT_PROVIDER": "gemini_live"}, clear=False):
-            channel = VoiceChannel(_DummyAgent())
+            with patch("agi_runtime.channels.voice.resolve_provider_credential") as mocked:
+                mocked.return_value.configured = True
+                mocked.return_value.secret = "fake"
+                channel = VoiceChannel(_DummyAgent())
         self.assertEqual(channel.voice_input_provider, "gemini_live")
 
     def test_voice_input_provider_defaults_to_local(self):
@@ -64,12 +68,37 @@ class TestVoiceChannel(unittest.TestCase):
             channel = VoiceChannel(_DummyAgent())
         self.assertEqual(channel.principal_id, "voice:alex")
 
-    def test_voice_output_provider_defaults_to_local_without_google_creds(self):
-        with patch.dict(os.environ, {"HELLOAGI_VOICE_OUTPUT_PROVIDER": "gemini_tts"}, clear=False):
+    def test_voice_output_provider_raises_when_gemini_requested_without_google_creds(self):
+        with patch("agi_runtime.channels.voice.resolve_provider_credential") as mocked:
+            mocked.return_value.configured = False
+            with self.assertRaises(RuntimeError) as ctx:
+                _normalize_voice_output_provider("gemini_tts")
+        self.assertIn("GOOGLE_API_KEY", str(ctx.exception))
+
+    def test_voice_input_provider_raises_when_gemini_requested_without_google_creds(self):
+        with patch("agi_runtime.channels.voice.resolve_provider_credential") as mocked:
+            mocked.return_value.configured = False
+            with self.assertRaises(RuntimeError) as ctx:
+                _normalize_voice_input_provider("gemini_live")
+        self.assertIn("GOOGLE_API_KEY", str(ctx.exception))
+
+    def test_voice_output_provider_auto_still_falls_back_silently(self):
+        with patch("agi_runtime.channels.voice.resolve_provider_credential") as mocked:
+            mocked.return_value.configured = False
+            provider = _normalize_voice_output_provider("auto")
+        self.assertEqual(provider, "local")
+
+    def test_probe_reports_missing_google_creds_without_raising(self):
+        with patch.dict(
+            os.environ,
+            {"HELLOAGI_VOICE_OUTPUT_PROVIDER": "gemini_tts", "HELLOAGI_VOICE_INPUT_PROVIDER": "gemini_live"},
+            clear=False,
+        ):
             with patch("agi_runtime.channels.voice.resolve_provider_credential") as mocked:
                 mocked.return_value.configured = False
-                provider = _normalize_voice_output_provider("gemini_tts")
-        self.assertEqual(provider, "local")
+                probe = probe_voice_runtime()
+        self.assertIn("google_credentials", probe["missing_modules"])
+        self.assertFalse(probe["available"])
 
     def test_wake_word_comes_from_env(self):
         with patch.dict(os.environ, {"HELLOAGI_VOICE_WAKE_WORD": "hey atlas"}, clear=False):
@@ -136,6 +165,53 @@ class TestVoiceChannel(unittest.TestCase):
         with patch.dict(os.environ, {"HELLOAGI_VOICE_ACK_STYLE": "rainbow"}, clear=False):
             channel = VoiceChannel(_DummyAgent())
         self.assertEqual(channel.ack_style, "beep")
+
+    def test_conversation_mode_disables_spoken_ack_by_default(self):
+        with patch.dict(os.environ, {"HELLOAGI_VOICE_CONVERSATION_MODE": "on"}, clear=False):
+            channel = VoiceChannel(_DummyAgent())
+        self.assertFalse(channel.speak_ack_enabled)
+
+    def test_self_echo_detection_matches_recent_spoken_text(self):
+        channel = VoiceChannel(_DummyAgent())
+        channel._last_spoken_texts.append("I'm ready to dive into some deep work now.")
+        self.assertTrue(channel._looks_like_self_echo("Ready to dive into deep work now"))
+        self.assertFalse(channel._looks_like_self_echo("Open Google and check flights tomorrow"))
+
+    def test_listen_once_filters_self_echo_and_keeps_listening(self):
+        channel = VoiceChannel(_DummyAgent())
+        channel._last_spoken_texts.append("I'm ready to dive into some deep work now.")
+        channel._running = True
+        raw = Mock(side_effect=["Ready to dive into deep work now", "Open Google"])
+        with patch.object(channel, "_listen_once_raw", raw):
+            heard = channel._listen_once(label="follow up", timeout=4.0, phrase_time_limit=2.0)
+        self.assertEqual(heard, "Open Google")
+        self.assertEqual(raw.call_count, 2)
+
+    def test_gemini_live_failure_enters_cooldown_and_uses_fallback(self):
+        with patch.dict(os.environ, {"HELLOAGI_VOICE_INPUT_PROVIDER": "gemini_live"}, clear=False):
+            with patch("agi_runtime.channels.voice.resolve_provider_credential") as mocked:
+                mocked.return_value.configured = True
+                mocked.return_value.secret = "fake"
+                channel = VoiceChannel(_DummyAgent())
+        future = Mock()
+        future.result.side_effect = RuntimeError("received 1011 internal error")
+        def _fake_submit(coro, loop):
+            coro.close()
+            return future
+        with patch.object(channel, "_ensure_live_loop", return_value=object()):
+            with patch("agi_runtime.channels.voice.asyncio.run_coroutine_threadsafe", side_effect=_fake_submit):
+                with patch.object(channel, "_transcribe_pcm_with_gemini_model", return_value="fallback transcript") as fallback:
+                    heard = channel._transcribe_pcm_with_gemini_live(b"pcm", sample_rate=16000, timeout=0.1)
+        self.assertEqual(heard, "fallback transcript")
+        self.assertTrue(channel._gemini_live_cooldown_until > time.monotonic())
+        self.assertEqual(fallback.call_count, 1)
+
+        with patch("agi_runtime.channels.voice.asyncio.run_coroutine_threadsafe") as live_call:
+            with patch.object(channel, "_transcribe_pcm_with_gemini_model", return_value="fallback again") as fallback:
+                heard = channel._transcribe_pcm_with_gemini_live(b"pcm", sample_rate=16000, timeout=0.1)
+        self.assertEqual(heard, "fallback again")
+        live_call.assert_not_called()
+        self.assertEqual(fallback.call_count, 1)
 
     def test_split_sentences_basic(self):
         chunks = _split_sentences("Hello. How are you?")

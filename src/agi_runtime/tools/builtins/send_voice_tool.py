@@ -6,6 +6,8 @@ import asyncio
 import base64
 import logging
 import os
+import shutil
+import subprocess
 import tempfile
 import time
 import wave
@@ -42,6 +44,10 @@ def _voice_tool_available() -> bool:
     except ImportError:
         return False
     return resolve_provider_credential("google").configured
+
+
+def _ffmpeg_binary() -> str | None:
+    return shutil.which("ffmpeg")
 
 
 def _pcm_to_wav_bytes(pcm: bytes, *, sample_rate: int = 24000) -> bytes:
@@ -108,6 +114,55 @@ def _synthesize_wav_bytes(text: str, *, style_hint: str) -> bytes:
     return _pcm_to_wav_bytes(pcm)
 
 
+def _write_temp_voice_file(audio_bytes: bytes, *, suffix: str) -> Path:
+    with tempfile.NamedTemporaryFile(prefix="helloagi-voice-", suffix=suffix, delete=False) as handle:
+        handle.write(audio_bytes)
+        return Path(handle.name)
+
+
+def _transcode_wav_to_ogg_opus(wav_path: Path) -> Path:
+    ffmpeg = _ffmpeg_binary()
+    if not ffmpeg:
+        raise RuntimeError("ffmpeg is required to create Telegram voice notes.")
+    ogg_path = wav_path.with_suffix(".ogg")
+    proc = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-i",
+            str(wav_path),
+            "-vn",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "48k",
+            str(ogg_path),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0 or not ogg_path.exists():
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise RuntimeError(f"ffmpeg voice transcode failed: {detail or 'unknown error'}")
+    return ogg_path
+
+
+def _prepare_voice_asset(channel, wav_bytes: bytes) -> tuple[Path, bool]:
+    wav_path = _write_temp_voice_file(wav_bytes, suffix=".wav")
+    if getattr(channel, "name", "") != "telegram":
+        return wav_path, False
+    try:
+        ogg_path = _transcode_wav_to_ogg_opus(wav_path)
+    except Exception as exc:
+        logger.warning("Telegram voice note packaging fell back to WAV: %s", exc)
+        return wav_path, False
+    try:
+        wav_path.unlink(missing_ok=True)
+    except Exception:
+        pass
+    return ogg_path, True
+
+
 @tool(
     name="send_voice",
     description=(
@@ -148,17 +203,16 @@ def send_voice(text: str, caption: str = "", style_hint: str = "default") -> Too
         return ToolResult(ok=False, output="", error="channel event loop is not running")
 
     wav_bytes = _synthesize_wav_bytes(spoken_text, style_hint=style_hint)
-    tmp_path = None
+    voice_path = None
+    telegram_native = False
     t0 = time.monotonic()
     try:
-        with tempfile.NamedTemporaryFile(prefix="helloagi-voice-", suffix=".wav", delete=False) as handle:
-            handle.write(wav_bytes)
-            tmp_path = Path(handle.name)
+        voice_path, telegram_native = _prepare_voice_asset(channel, wav_bytes)
 
         if "voice" in getattr(channel, "capabilities", frozenset()):
             try:
                 result = asyncio.run_coroutine_threadsafe(
-                    channel.send_voice(channel_id, str(tmp_path), caption=caption),
+                    channel.send_voice(channel_id, str(voice_path), caption=caption),
                     loop,
                 ).result(timeout=60.0)
             except Exception as exc:
@@ -166,8 +220,8 @@ def send_voice(text: str, caption: str = "", style_hint: str = "default") -> Too
             if result.get("ok"):
                 dur_ms = (time.monotonic() - t0) * 1000.0
                 logger.info(
-                    "voice out tool=send_voice channel=%s path=%s ms=%.1f ok=%s",
-                    type(channel).__name__, tmp_path, dur_ms, True,
+                    "voice out tool=send_voice channel=%s path=%s ms=%.1f ok=%s native=%s",
+                    type(channel).__name__, voice_path, dur_ms, True, telegram_native,
                 )
                 return ToolResult(ok=True, output=f"delivered voice note to {channel.name}")
 
@@ -175,20 +229,25 @@ def send_voice(text: str, caption: str = "", style_hint: str = "default") -> Too
             return ToolResult(ok=False, output="", error="current channel cannot deliver voice attachments")
 
         result = asyncio.run_coroutine_threadsafe(
-            channel.send_file(channel_id, str(tmp_path), caption=caption, filename="helloagi-voice.wav"),
+            channel.send_file(
+                channel_id,
+                str(voice_path),
+                caption=caption,
+                filename=f"helloagi-voice{voice_path.suffix}",
+            ),
             loop,
         ).result(timeout=60.0)
         dur_ms = (time.monotonic() - t0) * 1000.0
         logger.info(
-            "voice out tool=send_voice channel=%s path=%s ms=%.1f ok=%s",
-            type(channel).__name__, tmp_path, dur_ms, result.get("ok"),
+            "voice out tool=send_voice channel=%s path=%s ms=%.1f ok=%s native=%s",
+            type(channel).__name__, voice_path, dur_ms, result.get("ok"), telegram_native,
         )
         if result.get("ok"):
             return ToolResult(ok=True, output=f"delivered voice note to {channel.name}")
         return ToolResult(ok=False, output="", error=str(result.get("error") or "unknown send error"))
     finally:
-        if tmp_path is not None:
+        if voice_path is not None:
             try:
-                tmp_path.unlink(missing_ok=True)
+                voice_path.unlink(missing_ok=True)
             except Exception:
                 pass
