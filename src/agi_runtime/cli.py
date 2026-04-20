@@ -59,9 +59,9 @@ def _configure_stdio():
                 pass
 
 
-def _run_pip_command(args: list[str]) -> int:
+def _run_pip_command(args: list[str], *, cwd: str | Path | None = None) -> int:
     """Run pip through the active Python interpreter."""
-    return subprocess.run([sys.executable, "-m", "pip", *args]).returncode
+    return subprocess.run([sys.executable, "-m", "pip", *args], cwd=str(cwd) if cwd else None).returncode
 
 
 def _gov_icon(decision: str) -> str:
@@ -658,6 +658,17 @@ def extensions_doctor(enabled_only: bool = False):
     print(ExtensionManager().doctor(enabled_only=enabled_only))
 
 
+def extensions_install(name: str):
+    from agi_runtime.extensions.manager import ExtensionManager
+
+    manager = ExtensionManager()
+    manifest = manager.require(name)
+    args, cwd = manager.install_plan(name)
+    location = f" from {cwd}" if cwd else ""
+    print(f"Installing {manifest.title}{location}...")
+    raise SystemExit(_run_pip_command(args, cwd=cwd))
+
+
 def runs_list():
     from agi_runtime.orchestration.orchestrator import Orchestrator
 
@@ -815,8 +826,13 @@ def _serve_with_channels(args):
         requested_extensions.append("discord")
     if getattr(args, "voice", False):
         requested_extensions.append("voice")
+    explicit_channel_selection = bool(requested_extensions)
 
-    for channel in ExtensionManager().build_channels(agent, requested_names=requested_extensions):
+    for channel in ExtensionManager().build_channels(
+        agent,
+        requested_names=requested_extensions,
+        include_enabled=not explicit_channel_selection,
+    ):
         router.register(channel)
         print(f"{channel.name} extension registered")
 
@@ -949,6 +965,12 @@ def main():
     ext_enable.add_argument("name")
     ext_disable = ext_sub.add_parser("disable", help="disable an extension by name")
     ext_disable.add_argument("name")
+    ext_install = ext_sub.add_parser(
+        "install",
+        help="install dependencies for an extension in the current Python environment",
+        description="Install dependencies for an extension in the current Python environment.",
+    )
+    ext_install.add_argument("name")
     ext_sub.add_parser("doctor", help="check extension readiness")
 
     runsp = sub.add_parser("runs", help="inspect and control orchestrated workflow runs")
@@ -1080,10 +1102,12 @@ def main():
             extensions_enable(args.name)
         elif args.extensions_cmd == "disable":
             extensions_disable(args.name)
+        elif args.extensions_cmd == "install":
+            extensions_install(args.name)
         elif args.extensions_cmd == "doctor":
             extensions_doctor(enabled_only=False)
         else:
-            parser.error("extensions requires a subcommand: list, info, enable, disable, doctor")
+            parser.error("extensions requires a subcommand: list, info, enable, disable, install, doctor")
     elif args.cmd == "runs":
         if args.runs_cmd == "list":
             runs_list()

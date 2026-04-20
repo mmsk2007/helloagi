@@ -199,6 +199,26 @@ def _windows_tts_rate(raw_rate: int) -> int:
     return max(-10, min(10, scaled))
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Split text into speakable sentence chunks.
+
+    Returns a list where each item ends (when possible) at ``. ? !`` or a paragraph break.
+    A trailing fragment shorter than ~4 chars is merged into the previous chunk so we
+    do not emit stubs like ``"OK."`` on their own.
+    """
+    if not text:
+        return []
+    normalized = " ".join(text.split())
+    if not normalized:
+        return []
+    parts = re.split(r"(?<=[.!?])\s+", normalized)
+    chunks = [part.strip() for part in parts if part and part.strip()]
+    if len(chunks) >= 2 and len(chunks[-1]) <= 4:
+        chunks[-2] = f"{chunks[-2]} {chunks[-1]}".strip()
+        chunks.pop()
+    return chunks
+
+
 def _powershell_error_message(output: str) -> str:
     if "#< CLIXML" in output:
         return "Windows speech services are unavailable in this session."
@@ -265,6 +285,13 @@ class VoiceChannel(BaseChannel):
         self.approval_timeout = _env_float("HELLOAGI_VOICE_APPROVAL_TIMEOUT", 6.0)
         self.max_reply_chars = _env_int("HELLOAGI_VOICE_MAX_REPLY_CHARS", 700)
         self.progress_throttle_seconds = _env_float("HELLOAGI_VOICE_PROGRESS_THROTTLE_SECONDS", 6.0)
+        self.followup_window_seconds = max(_env_float("HELLOAGI_VOICE_FOLLOWUP_SECONDS", 12.0), 0.0)
+        self.followup_phrase_limit = _env_float("HELLOAGI_VOICE_FOLLOWUP_PHRASE_LIMIT", self.command_phrase_limit)
+        self.conversation_mode = _env_text("HELLOAGI_VOICE_CONVERSATION_MODE", "off").lower() in {"on", "1", "true", "yes"}
+        self.conversation_idle_timeout = _env_float("HELLOAGI_VOICE_CONVERSATION_IDLE_TIMEOUT", 30.0)
+        self.ack_style = _env_text("HELLOAGI_VOICE_ACK_STYLE", "beep").lower()
+        if self.ack_style not in {"beep", "speak", "off"}:
+            self.ack_style = "beep"
         self.owner_name = self._resolve_owner_name()
         self._engine = None
         self._sr = None
@@ -281,6 +308,9 @@ class VoiceChannel(BaseChannel):
         self._presence = voice_presence_store()
         self._work_sound_stop: threading.Event | None = None
         self._work_sound_thread: threading.Thread | None = None
+        self._barge_in_detected = threading.Event()
+        self._live_loop: asyncio.AbstractEventLoop | None = None
+        self._live_loop_thread: threading.Thread | None = None
         self._publish_presence("inactive", "waiting to start", active=False)
 
     async def start(self):
@@ -289,12 +319,26 @@ class VoiceChannel(BaseChannel):
         self._running = True
         self._publish_presence("starting", "initializing voice channel", active=True)
         self._print_intro()
-        await asyncio.to_thread(
-            self.speak,
-            f"Voice channel online. Say {self.wake_word} to wake me up.",
-            False,
-        )
+        if self.conversation_mode:
+            intro = "Voice channel online. Conversation mode is on — just speak."
+        else:
+            intro = f"Voice channel online. Say {self.wake_word} to wake me up."
+        await asyncio.to_thread(self.speak, intro, False)
 
+        try:
+            if self.conversation_mode:
+                await self._run_conversation_loop()
+            else:
+                await self._run_wake_loop()
+        except KeyboardInterrupt:
+            pass
+
+        self._running = False
+        self._publish_presence("stopped", "voice channel offline", active=False)
+        self._render_status("stopped", "")
+        self._clear_status_line()
+
+    async def _run_wake_loop(self):
         while self._running:
             try:
                 triggered = await asyncio.to_thread(self._listen_for_wake_word)
@@ -313,23 +357,68 @@ class VoiceChannel(BaseChannel):
                 self._publish_presence("idle", f"say '{self.wake_word}'", active=True)
                 continue
 
-            await asyncio.to_thread(self.speak, "I'm listening.", False)
+            await asyncio.to_thread(self._acknowledge_open_mic)
             command = await asyncio.to_thread(self._listen_for_command)
             if not command:
                 self._publish_presence("idle", f"say '{self.wake_word}'", active=True)
                 self._render_status("idle", f"say '{self.wake_word}'")
                 continue
-
             if self._should_stop(command):
                 await asyncio.to_thread(self.speak, "Voice channel sleeping.", False)
                 break
 
             await asyncio.to_thread(self._handle_command, command)
+            if not await self._run_followup_loop():
+                break
 
-        self._running = False
-        self._publish_presence("stopped", "voice channel offline", active=False)
-        self._render_status("stopped", "")
-        self._clear_status_line()
+    async def _run_followup_loop(self) -> bool:
+        """Stay in command-listen for a bounded window after a reply.
+
+        Returns False if the user asked to stop, True otherwise."""
+        while self._running and self.followup_window_seconds > 0:
+            self._publish_presence("listening", "follow up", active=True, error="")
+            self._render_status("listening", "follow up")
+            followup = await asyncio.to_thread(
+                self._listen_once,
+                label="follow up",
+                timeout=self.followup_window_seconds,
+                phrase_time_limit=self.followup_phrase_limit,
+            )
+            if not followup:
+                return True
+            if self._should_stop(followup):
+                await asyncio.to_thread(self.speak, "Voice channel sleeping.", False)
+                return False
+            await asyncio.to_thread(self._handle_command, followup)
+        return True
+
+    async def _run_conversation_loop(self):
+        while self._running:
+            self._publish_presence("listening", "speak anytime", active=True, error="")
+            self._render_status("listening", "speak anytime")
+            try:
+                command = await asyncio.to_thread(
+                    self._listen_once,
+                    label="speak anytime",
+                    timeout=self.conversation_idle_timeout,
+                    phrase_time_limit=self.command_phrase_limit,
+                )
+            except KeyboardInterrupt:
+                break
+            except Exception as exc:
+                logger.exception("Voice conversation loop failed: %s", exc)
+                self._publish_presence("error", str(exc), active=True, error=str(exc))
+                self._println(f"[voice] error | {exc}")
+                await asyncio.sleep(1.0)
+                continue
+            if not self._running:
+                break
+            if not command:
+                continue
+            if self._should_stop(command):
+                await asyncio.to_thread(self.speak, "Voice channel sleeping.", False)
+                break
+            await asyncio.to_thread(self._handle_command, command)
 
     async def stop(self):
         """Stop the voice loop."""
@@ -354,6 +443,57 @@ class VoiceChannel(BaseChannel):
         self._publish_presence("idle", f"say '{self.wake_word}'", active=True)
         self._render_status("idle", f"say '{self.wake_word}'")
 
+    def _stream_speak(self, text: str) -> None:
+        """Speak a long response as sentence chunks so first-sound latency drops."""
+        spoken = self._truncate_for_voice(text)
+        if not spoken:
+            return
+        sentences = _split_sentences(spoken)
+        if len(sentences) <= 1:
+            self.speak(spoken)
+            return
+        self._barge_in_detected.clear()
+        for index, sentence in enumerate(sentences):
+            if not self._running or self._barge_in_detected.is_set():
+                break
+            idle_after = index == len(sentences) - 1
+            self._speak_internal(
+                sentence,
+                announce=(index == 0),
+                style_hint="default",
+                idle_after=idle_after,
+                state="speaking" if not idle_after else "idle",
+                detail="" if idle_after else "...",
+            )
+        self._publish_presence("idle", f"say '{self.wake_word}'", active=True)
+        self._render_status("idle", f"say '{self.wake_word}'")
+
+    def _acknowledge_open_mic(self) -> None:
+        """Signal that the mic is open without blocking on a spoken phrase."""
+        style = self.ack_style
+        if style == "off":
+            return
+        if style == "speak":
+            self._speak_internal(
+                "I'm listening.",
+                announce=False,
+                style_hint="default",
+                idle_after=False,
+                state="listening",
+                detail="listening",
+            )
+            return
+        # "beep" — non-blocking earcon
+        if _is_windows():
+            def _beep():
+                try:
+                    import winsound
+                    winsound.Beep(880, 80)
+                except Exception:
+                    pass
+            threading.Thread(target=_beep, daemon=True).start()
+        # On non-Windows we skip the earcon (sounddevice may not be loaded); mic opens immediately.
+
     def _handle_command(self, command: str):
         self._println(f"You: {command}")
         self._publish_presence("thinking", command[:120], active=True, last_heard=command, error="")
@@ -374,7 +514,7 @@ class VoiceChannel(BaseChannel):
             self.agent.on_tool_start = original_tool_start
             self.agent.on_tool_end = original_tool_end
             self._stop_work_sound()
-        self.speak(response.text)
+        self._stream_speak(response.text)
 
     def _voice_approval_prompt(self, prompt: str) -> str:
         self._println(prompt)
@@ -782,7 +922,19 @@ class VoiceChannel(BaseChannel):
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as handle:
                     handle.write(wav_bytes)
                     tmp_path = handle.name
-                winsound.PlaySound(tmp_path, winsound.SND_FILENAME)
+                # Async playback so barge-in can cancel mid-utterance.
+                winsound.PlaySound(tmp_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                # Playback runtime is ~len(pcm)/48kbytes/s for 16-bit mono 24 kHz; cap at 60 s for safety.
+                approx_seconds = max(len(wav_bytes) / 48000.0, 0.2)
+                deadline = time.monotonic() + min(approx_seconds + 0.5, 60.0)
+                while time.monotonic() < deadline:
+                    if self._barge_in_detected.is_set() or not self._running:
+                        try:
+                            winsound.PlaySound(None, winsound.SND_PURGE)
+                        except Exception:
+                            pass
+                        break
+                    time.sleep(0.05)
             finally:
                 if tmp_path:
                     try:
@@ -928,6 +1080,35 @@ class VoiceChannel(BaseChannel):
         power = sum(sample * sample for sample in samples) / len(samples)
         return int(math.sqrt(power))
 
+    def _ensure_live_loop(self) -> asyncio.AbstractEventLoop:
+        loop = self._live_loop
+        if loop is not None and not loop.is_closed():
+            return loop
+        ready = threading.Event()
+        new_loop: list[asyncio.AbstractEventLoop] = []
+
+        def _runner():
+            created = asyncio.new_event_loop()
+            new_loop.append(created)
+            asyncio.set_event_loop(created)
+            ready.set()
+            try:
+                created.run_forever()
+            finally:
+                try:
+                    created.close()
+                except Exception:
+                    pass
+
+        thread = threading.Thread(target=_runner, name="helloagi-voice-live-loop", daemon=True)
+        thread.start()
+        ready.wait(timeout=3.0)
+        if not new_loop:
+            raise RuntimeError("Failed to start voice live event loop thread.")
+        self._live_loop = new_loop[0]
+        self._live_loop_thread = thread
+        return self._live_loop
+
     def _transcribe_pcm_with_gemini_live(
         self,
         pcm: bytes,
@@ -939,12 +1120,12 @@ class VoiceChannel(BaseChannel):
             return ""
         sample_rate = sample_rate or self.command_sample_rate
         try:
-            return asyncio.run(
-                asyncio.wait_for(
-                    self._transcribe_pcm_with_gemini_live_async(pcm, sample_rate=sample_rate),
-                    timeout=timeout,
-                )
+            loop = self._ensure_live_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                self._transcribe_pcm_with_gemini_live_async(pcm, sample_rate=sample_rate),
+                loop,
             )
+            return future.result(timeout=timeout)
         except Exception as exc:
             logger.warning("Gemini Live input failed; falling back to Gemini audio understanding: %s", exc)
             return self._transcribe_pcm_with_gemini_model(pcm, sample_rate=sample_rate)

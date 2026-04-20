@@ -6,6 +6,7 @@ from importlib.util import find_spec
 from pathlib import Path
 import json
 import os
+import re
 from typing import Any
 
 from agi_runtime.config.env import load_local_env
@@ -167,6 +168,7 @@ class ExtensionManager:
             notes.append(f"Set: {', '.join(missing_env)}")
         if missing_modules:
             notes.append("Install extra: " + ", ".join(manifest.extras or manifest.python_modules))
+            notes.append(f"Run: {self.install_command(manifest.name)}")
         return ExtensionStatus(
             name=manifest.name,
             title=manifest.title,
@@ -202,17 +204,37 @@ class ExtensionManager:
             "extensions": [asdict(item) for item in statuses],
         }
 
-    def build_channels(self, agent, requested_names: list[str] | None = None):
-        channel_names = list(dict.fromkeys(self.enabled_names(category="channel") + (requested_names or [])))
+    def resolve_channel_names(
+        self,
+        *,
+        requested_names: list[str] | None = None,
+        include_enabled: bool = True,
+    ) -> list[str]:
+        requested = [name for name in (requested_names or []) if name in self._manifests]
+        if include_enabled:
+            enabled = self.enabled_names(category="channel")
+            return list(dict.fromkeys(enabled + requested))
+        return list(dict.fromkeys(requested))
+
+    def build_channels(
+        self,
+        agent,
+        requested_names: list[str] | None = None,
+        *,
+        include_enabled: bool = True,
+    ):
+        channel_names = self.resolve_channel_names(requested_names=requested_names, include_enabled=include_enabled)
         channels = []
         for name in channel_names:
             manifest = self.require(name)
             status = self.status(name)
             if not status.available:
+                remediation = self.readiness_hint(name, status=status)
                 raise RuntimeError(
                     f"Extension `{name}` is not ready. "
                     f"Missing env: {status.missing_env or 'none'}; "
-                    f"missing modules: {status.missing_modules or 'none'}"
+                    f"missing modules: {status.missing_modules or 'none'}. "
+                    f"{remediation}"
                 )
             if not manifest.factory_path:
                 continue
@@ -220,8 +242,47 @@ class ExtensionManager:
             channels.append(factory(agent))
         return channels
 
+    def install_command(self, name: str) -> str:
+        self.require(name)
+        return f"python -m agi_runtime.cli extensions install {name}"
+
+    def readiness_hint(self, name: str, *, status: ExtensionStatus | None = None) -> str:
+        manifest = self.require(name)
+        status = status or self.status(name)
+        hints: list[str] = []
+        if status.missing_modules:
+            hints.append(f"Run: {self.install_command(manifest.name)}")
+        if status.missing_env:
+            hints.append(f"Set env: {', '.join(status.missing_env)}")
+        return " ".join(hints) or f"Inspect with: python -m agi_runtime.cli extensions info {manifest.name}"
+
+    def install_plan(self, name: str) -> tuple[list[str], Path | None]:
+        manifest = self.require(name)
+        if not manifest.extras:
+            raise RuntimeError(f"Extension `{name}` has no installable extra.")
+        project_root = self._find_local_project_root()
+        if project_root is not None:
+            extra_suffix = self._local_extra_suffix(manifest.extras[0])
+            return ["install", "-e", f".[{extra_suffix}]"], project_root
+        return ["install", manifest.extras[0]], None
+
     @staticmethod
     def _resolve_factory(path: str):
         module_name, attr_name = path.split(":", 1)
         module = import_module(module_name)
         return getattr(module, attr_name)
+
+    @staticmethod
+    def _find_local_project_root() -> Path | None:
+        current = Path(__file__).resolve()
+        for candidate in current.parents:
+            if (candidate / "pyproject.toml").exists() and (candidate / "src" / "agi_runtime").exists():
+                return candidate
+        return None
+
+    @staticmethod
+    def _local_extra_suffix(extra_spec: str) -> str:
+        match = re.search(r"\[([^\]]+)\]$", extra_spec)
+        if not match:
+            raise RuntimeError(f"Unsupported extension extra spec: {extra_spec}")
+        return match.group(1)

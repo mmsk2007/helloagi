@@ -540,6 +540,7 @@ Then open `http://127.0.0.1:8787/voice/monitor` to see the built-in live voice i
 Full agent capabilities on every channel — same SRG governance, same tools, same personality. The voice channel routes reasoning through the normal HelloAGI provider stack and can use either local audio I/O or Gemini audio I/O.
 
 On Windows, the voice channel uses the built-in `System.Speech` APIs through PowerShell, so you do not need a `PyAudio` wheel. On macOS and Linux, the voice extra installs `SpeechRecognition` + `pyttsx3`, and your OS may still need a local microphone backend.
+If a user installed base `helloagi` first and enables voice later, they can recover in-place with `helloagi extensions install voice`.
 
 To force a specific Gemini model for agent reasoning, set `HELLOAGI_GOOGLE_MODEL` in `.env`, for example `gemini-flash-latest` or `gemini-3.1-pro-preview`.
 To transcribe the microphone with Gemini Live, set `HELLOAGI_VOICE_INPUT_PROVIDER=gemini_live`.

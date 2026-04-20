@@ -722,6 +722,13 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     else:
         extension_manager.disable("embeddings")
     enabled_extensions = extension_manager.enabled_names()
+    for name in enabled_extensions:
+        ext_status = extension_manager.status(name)
+        if ext_status.missing_modules:
+            _warn(f"{ext_status.title} is enabled but missing dependencies.")
+            _info(f"Run: {extension_manager.install_command(name)}")
+        if ext_status.missing_env:
+            _warn(f"{ext_status.title} still needs env: {', '.join(ext_status.missing_env)}")
     print()
 
     _step(6, total_steps, "Service Auth and Runtime")

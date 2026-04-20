@@ -92,6 +92,11 @@ class TestCLIContract(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("extensions", result.stdout.lower())
 
+    def test_extensions_install_help_is_exposed(self):
+        result = self.run_cli("extensions", "install", "--help")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("current Python environment", result.stdout)
+
     def test_onboard_help_exposes_non_interactive_flags(self):
         result = self.run_cli("onboard", "--help")
         self.assertEqual(result.returncode, 0, result.stderr)

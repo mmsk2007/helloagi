@@ -48,6 +48,7 @@ helloagi service install --extension telegram
 ## Voice
 
 - Install: `pip install "helloagi[voice]"`
+- Recovery after a base install: `helloagi extensions install voice`
 - Secrets: none
 - Start: `helloagi serve --voice`
 - Monitor: open `http://127.0.0.1:8787/voice/monitor` while the voice channel is running

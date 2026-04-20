@@ -8,6 +8,7 @@ from agi_runtime.channels.voice import (
     _normalize_voice_input_provider,
     _normalize_voice_output_provider,
     _resolve_voice_principal_id,
+    _split_sentences,
     probe_voice_runtime,
 )
 
@@ -105,3 +106,50 @@ class TestVoiceChannel(unittest.TestCase):
         prompt = channel._build_tts_prompt("Sure Alex, I'm on it.", style_hint="ack")
         self.assertIn("[warmly]", prompt)
         self.assertIn("Transcript:", prompt)
+
+    def test_followup_window_defaults_to_twelve_seconds(self):
+        with patch.dict(os.environ, {}, clear=False):
+            channel = VoiceChannel(_DummyAgent())
+        self.assertEqual(channel.followup_window_seconds, 12.0)
+
+    def test_followup_window_can_be_disabled(self):
+        with patch.dict(os.environ, {"HELLOAGI_VOICE_FOLLOWUP_SECONDS": "0"}, clear=False):
+            channel = VoiceChannel(_DummyAgent())
+        self.assertEqual(channel.followup_window_seconds, 0.0)
+
+    def test_conversation_mode_env_on(self):
+        with patch.dict(os.environ, {"HELLOAGI_VOICE_CONVERSATION_MODE": "on"}, clear=False):
+            channel = VoiceChannel(_DummyAgent())
+        self.assertTrue(channel.conversation_mode)
+
+    def test_conversation_mode_env_off_by_default(self):
+        with patch.dict(os.environ, {}, clear=False):
+            channel = VoiceChannel(_DummyAgent())
+        self.assertFalse(channel.conversation_mode)
+
+    def test_ack_style_defaults_to_beep(self):
+        with patch.dict(os.environ, {}, clear=False):
+            channel = VoiceChannel(_DummyAgent())
+        self.assertEqual(channel.ack_style, "beep")
+
+    def test_ack_style_invalid_falls_back_to_beep(self):
+        with patch.dict(os.environ, {"HELLOAGI_VOICE_ACK_STYLE": "rainbow"}, clear=False):
+            channel = VoiceChannel(_DummyAgent())
+        self.assertEqual(channel.ack_style, "beep")
+
+    def test_split_sentences_basic(self):
+        chunks = _split_sentences("Hello. How are you?")
+        self.assertEqual(chunks, ["Hello.", "How are you?"])
+
+    def test_split_sentences_merges_short_trailing_fragment(self):
+        chunks = _split_sentences("The SRG reviewed the call. Now allowing. OK.")
+        self.assertEqual(len(chunks), 2)
+        self.assertTrue(chunks[-1].endswith("OK."))
+
+    def test_split_sentences_handles_empty(self):
+        self.assertEqual(_split_sentences(""), [])
+        self.assertEqual(_split_sentences("   "), [])
+
+    def test_split_sentences_collapses_whitespace(self):
+        chunks = _split_sentences("Line one.\n\n  Line two!")
+        self.assertEqual(chunks, ["Line one.", "Line two!"])

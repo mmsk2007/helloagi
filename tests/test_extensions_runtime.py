@@ -41,6 +41,23 @@ class TestExtensionsRuntime(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_resolve_channel_names_respects_explicit_selection(self):
+        tmp = _make_scratch_dir()
+        try:
+            manager = ExtensionManager(str(tmp / "extensions_state.json"))
+            manager.enable("voice")
+            names = manager.resolve_channel_names(requested_names=["telegram"], include_enabled=False)
+            self.assertEqual(names, ["telegram"])
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_install_command_is_human_readable(self):
+        manager = ExtensionManager()
+        self.assertEqual(
+            manager.install_command("voice"),
+            "python -m agi_runtime.cli extensions install voice",
+        )
+
     def test_doctor_reports_missing_dependencies_or_env(self):
         tmp = _make_scratch_dir()
         manager = ExtensionManager(str(tmp / "extensions_state.json"))

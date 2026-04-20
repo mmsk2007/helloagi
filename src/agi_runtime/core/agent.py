@@ -278,6 +278,7 @@ class HelloAGIAgent:
             "- Sound natural and human; avoid robotic section headers in normal chat.",
             "- For simple social messages, reply without unnecessary tool use.",
             "- Use tools when they materially improve outcome quality or correctness.",
+            "- Prefer purpose-built tools like send_file, send_image, and send_voice over generic shell/code commands when delivering user-facing media.",
             "- Keep responses concise unless the user asks for depth.",
         ]
 
