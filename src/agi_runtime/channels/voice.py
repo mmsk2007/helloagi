@@ -54,6 +54,13 @@ _VOICE_OUTPUT_LOCAL = "local"
 _VOICE_OUTPUT_GEMINI_TTS = "gemini_tts"
 
 
+def _module_available(module_name: str) -> bool:
+    try:
+        return find_spec(module_name) is not None
+    except ModuleNotFoundError:
+        return False
+
+
 def _env_float(name: str, default: float) -> float:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -157,7 +164,7 @@ def probe_voice_runtime() -> dict[str, Any]:
             notes.append("Windows voice uses the built-in System.Speech APIs. No PyAudio wheel is required.")
     else:
         for module_name in ("speech_recognition", "pyttsx3"):
-            if find_spec(module_name) is None:
+            if not _module_available(module_name):
                 missing_modules.append(module_name)
         if not missing_modules:
             notes.append(
@@ -165,14 +172,14 @@ def probe_voice_runtime() -> dict[str, Any]:
             )
     if input_provider == _VOICE_INPUT_GEMINI_LIVE:
         for module_name in ("google.genai", "sounddevice"):
-            if find_spec(module_name) is None and module_name not in missing_modules:
+            if not _module_available(module_name) and module_name not in missing_modules:
                 missing_modules.append(module_name)
         if resolve_provider_credential("google").configured:
             notes.append("Voice input uses Gemini Live transcription when Google credentials are configured.")
         else:
             notes.append("Gemini Live input requested but Google credentials are not configured; local input will fail.")
     if output_provider == _VOICE_OUTPUT_GEMINI_TTS:
-        if find_spec("google.genai") is None:
+        if not _module_available("google.genai"):
             missing_modules.append("google.genai")
         elif not resolve_provider_credential("google").configured:
             notes.append("Gemini TTS requested but Google credentials are not configured; falling back to local voice.")
@@ -817,7 +824,7 @@ class VoiceChannel(BaseChannel):
     def _ensure_gemini_tts(self):
         if self._gemini_tts_client is not None:
             return
-        if find_spec("google.genai") is None:
+        if not _module_available("google.genai"):
             raise ImportError("Gemini TTS output requires `google-genai`.")
         credential = resolve_provider_credential("google")
         if not credential.configured:
@@ -829,7 +836,7 @@ class VoiceChannel(BaseChannel):
     def _ensure_gemini_live(self):
         if self._gemini_live_client is not None:
             return
-        if find_spec("google.genai") is None:
+        if not _module_available("google.genai"):
             raise ImportError("Gemini Live input requires `google-genai`.")
         credential = resolve_provider_credential("google")
         if not credential.configured:

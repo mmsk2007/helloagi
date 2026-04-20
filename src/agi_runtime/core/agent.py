@@ -58,6 +58,16 @@ except ImportError:
     _ANTHROPIC_AVAILABLE = False
 
 
+def _module_available(name: str) -> bool:
+    """Return False when an optional module or parent namespace is absent."""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ModuleNotFoundError:
+        return False
+
+
 @dataclass
 class AgentResponse:
     """Response from the agent."""
@@ -194,9 +204,7 @@ class HelloAGIAgent:
 
         anthropic_credential = resolve_provider_credential("anthropic")
         google_credential = resolve_provider_credential("google")
-        import importlib.util
-
-        has_genai = importlib.util.find_spec("google.genai") is not None
+        has_genai = _module_available("google.genai")
 
         if pref == "auto":
             anthropic_ok = (
