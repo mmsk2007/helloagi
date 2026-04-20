@@ -23,3 +23,8 @@ memory/
 
 docs/daily-research/
 helloagi.onboard.json
+
+# Screenshot / screen-capture artifacts from browser + computer-use tool runs.
+# These are personal desktop captures and must never land in the public repo.
+# If a real PNG asset is ever needed, add it explicitly with `git add -f path/to/file.png`.
+*.png
