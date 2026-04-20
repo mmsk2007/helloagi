@@ -559,6 +559,8 @@ def service_install(args):
     from agi_runtime.service.manager import ServiceManager
 
     extension_names = list(args.extension or [])
+    if getattr(args, "voice", False) and "voice" not in extension_names:
+        extension_names.append("voice")
     for enabled_name in ExtensionManager().enabled_names(category="channel"):
         if enabled_name not in extension_names:
             extension_names.append(enabled_name)
@@ -794,7 +796,7 @@ def _setup_serve_logging(verbose: int, quiet: bool) -> None:
 
 
 def _serve_with_channels(args):
-    """Start HTTP API with optional Telegram/Discord channels."""
+    """Start HTTP API with optional channel extensions."""
     import asyncio
     from agi_runtime.core.agent import HelloAGIAgent
     from agi_runtime.extensions.manager import ExtensionManager
@@ -811,6 +813,8 @@ def _serve_with_channels(args):
         requested_extensions.append("telegram")
     if args.discord:
         requested_extensions.append("discord")
+    if getattr(args, "voice", False):
+        requested_extensions.append("voice")
 
     for channel in ExtensionManager().build_channels(agent, requested_names=requested_extensions):
         router.register(channel)
@@ -833,6 +837,8 @@ def _serve_with_channels(args):
     http_thread = threading.Thread(target=srv.serve_forever, daemon=True)
     http_thread.start()
     print(f"HTTP API listening on http://{args.host}:{args.port}")
+    if "voice" in router.active_channels:
+        print(f"Voice monitor: http://{args.host}:{args.port}/voice/monitor")
 
     # Windows default (Proactor) often logs "Event loop is closed" from asyncio
     # transports when the loop shuts down; Selector avoids it for polling bots.
@@ -887,6 +893,7 @@ def main():
     serverp.add_argument("--port", type=int, default=8787)
     serverp.add_argument("--telegram", action="store_true", help="also start Telegram bot")
     serverp.add_argument("--discord", action="store_true", help="also start Discord bot")
+    serverp.add_argument("--voice", action="store_true", help="also start local wake-word voice channel")
     serverp.add_argument("--extension", action="append", default=[], help="enable a named extension (repeatable)")
     serverp.add_argument("--require-auth", action="store_true", help="require HELLOAGI_API_KEY for API access")
     serverp.add_argument("--config", default="helloagi.json")
@@ -917,6 +924,7 @@ def main():
     service_installp.add_argument("--policy", default="safe-default")
     service_installp.add_argument("--telegram", action="store_true")
     service_installp.add_argument("--discord", action="store_true")
+    service_installp.add_argument("--voice", action="store_true")
     service_installp.add_argument("--extension", action="append", default=[], help="enable a named extension (repeatable)")
     service_installp.add_argument("--workdir", default=".", help="working directory for config, .env, and runtime state")
     service_sub.add_parser("start", help="start local background service")
@@ -1036,7 +1044,7 @@ def main():
         from agi_runtime.api.server import run_server
         from agi_runtime.extensions.manager import ExtensionManager
 
-        if args.telegram or args.discord or args.extension or ExtensionManager().enabled_names(category="channel"):
+        if args.telegram or args.discord or args.voice or args.extension or ExtensionManager().enabled_names(category="channel"):
             _serve_with_channels(args)
         else:
             run_server(args.host, args.port, getattr(args, "config", "helloagi.json"), args.policy, require_auth=args.require_auth)

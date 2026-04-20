@@ -1,7 +1,10 @@
 __pycache__/
 *.pyc
+.pytest_cache/
 _local_install/
 .venv/
+.tmp-tests/
+.tmp-pip/
 build/
 src/*.egg-info/
 .env

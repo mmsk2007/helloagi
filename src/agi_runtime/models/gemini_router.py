@@ -7,6 +7,7 @@ see https://ai.google.dev/gemini-api/docs/models — on 404 we fall back to stab
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 
 # Gemini 3.x (preview) — latest Flash-class routing per Google AI docs / changelog.
 GEMINI_3_FLASH = "gemini-3-flash-preview"
@@ -35,8 +36,20 @@ class GeminiRouteDecision:
     reason: str
 
 
-def route_gemini_model(prompt: str) -> GeminiRouteDecision:
+def route_gemini_model(prompt: str, *, default_tier: str = "balanced") -> GeminiRouteDecision:
+    override = (
+        os.environ.get("HELLOAGI_GOOGLE_MODEL", "").strip()
+        or os.environ.get("HELLOAGI_GEMINI_MODEL", "").strip()
+    )
+    if override:
+        return GeminiRouteDecision(model=override, reason="env-override")
+
     p = prompt.lower()
+    tier = (default_tier or "balanced").strip().lower()
+    if tier == "speed":
+        return GeminiRouteDecision(model=FLASH_FAST, reason="settings-tier-speed")
+    if tier == "quality":
+        return GeminiRouteDecision(model=FLASH_QUALITY, reason="settings-tier-quality")
     if any(k in p for k in SPEED_KEYWORDS) and len(prompt) < 100:
         return GeminiRouteDecision(model=FLASH_FAST, reason="latency-priority")
     if any(k in p for k in QUALITY_KEYWORDS) or len(prompt) > 500:

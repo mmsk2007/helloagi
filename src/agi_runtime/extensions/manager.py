@@ -50,6 +50,12 @@ def _build_discord_channel(agent):
     return DiscordChannel(agent)
 
 
+def _build_voice_channel(agent):
+    from agi_runtime.channels.voice import VoiceChannel
+
+    return VoiceChannel(agent)
+
+
 class ExtensionManager:
     def __init__(self, state_path: str = "memory/extensions_state.json"):
         self.state_path = Path(state_path)
@@ -76,6 +82,15 @@ class ExtensionManager:
                     python_modules=["discord"],
                     extras=["helloagi[discord]"],
                     factory_path="agi_runtime.extensions.manager:_build_discord_channel",
+                ),
+                ExtensionManifest(
+                    name="voice",
+                    title="Local Voice",
+                    category="channel",
+                    description="Wake-word local microphone + speaker channel for hands-free desktop conversations.",
+                    python_modules=[],
+                    extras=["helloagi[voice]"],
+                    factory_path="agi_runtime.extensions.manager:_build_voice_channel",
                 ),
                 ExtensionManifest(
                     name="embeddings",
@@ -140,8 +155,14 @@ class ExtensionManager:
         enabled = manifest.name in self.enabled_names()
         missing_env = [env_name for env_name in manifest.required_env if not os.environ.get(env_name)]
         missing_modules = [module_name for module_name in manifest.python_modules if find_spec(module_name) is None]
-        available = not missing_env and not missing_modules
         notes: list[str] = []
+        if manifest.name == "voice":
+            from agi_runtime.channels.voice import probe_voice_runtime
+
+            voice_probe = probe_voice_runtime()
+            missing_modules = list(voice_probe.get("missing_modules", []))
+            notes.extend(str(note) for note in voice_probe.get("notes", []))
+        available = not missing_env and not missing_modules
         if missing_env:
             notes.append(f"Set: {', '.join(missing_env)}")
         if missing_modules:
@@ -204,4 +225,3 @@ class ExtensionManager:
         module_name, attr_name = path.split(":", 1)
         module = import_module(module_name)
         return getattr(module, attr_name)
-

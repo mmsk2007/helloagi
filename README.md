@@ -34,7 +34,7 @@
 
 ---
 
-HelloAGI is an **open-source autonomous agent runtime with deterministic governance**. The agent plans and uses real tools to do real work, and **every tool call runs through SRG** — a Python policy engine, not a prompt — that cannot be jailbroken by the model it's governing. It runs **local-first** with the option of Telegram, Discord, and an HTTP API. It keeps **per-principal memory and identity** across sessions, and it's **time-aware** (current date, IANA timezone, UTC anchor in every turn).
+HelloAGI is an **open-source autonomous agent runtime with deterministic governance**. The agent plans and uses real tools to do real work, and **every tool call runs through SRG** — a Python policy engine, not a prompt — that cannot be jailbroken by the model it's governing. It runs **local-first** with the option of Telegram, Discord, local voice, and an HTTP API. It keeps **per-principal memory and identity** across sessions, and it's **time-aware** (current date, IANA timezone, UTC anchor in every turn).
 
 ## What it looks like
 
@@ -95,7 +95,7 @@ The installer launches a real setup flow immediately. The wizard now covers:
 - runtime mode: `cli`, `hybrid`, or `service`
 - active provider choice: `template`, `anthropic`, or `google`
 - provider auth mode: `api_key` or `auth_token`
-- Telegram and Discord enablement
+- Telegram, Discord, and local voice enablement
 - local service auth token generation with `HELLOAGI_API_KEY`
 - readiness checks and exact next commands
 
@@ -112,8 +112,8 @@ The installer launches a real setup flow immediately. The wizard now covers:
 
   [##-----] Step 2/7: Agent Identity
     > Agent name: Lana
-    > What should I call you: Mohammed
-    > Your IANA timezone (e.g. Asia/Riyadh): Asia/Riyadh
+    > What should I call you: Alex
+    > Your IANA timezone (e.g. America/New_York): America/New_York
 
   ...
 
@@ -131,6 +131,7 @@ helloagi oneshot --message "What can you do?"   # Single question
 helloagi serve                                  # HTTP API on localhost:8787
 helloagi serve --telegram                       # + Telegram bot
 helloagi serve --discord                        # + Discord bot
+helloagi serve --voice                          # + local wake-word voice channel
 helloagi health                                 # Full local runtime + service health
 helloagi service install --telegram             # Install local background service config
 helloagi service start                          # Start local background service
@@ -213,7 +214,7 @@ cd helloagi
    helloagi onboard
    ```
 
-   The wizard can import an existing OpenClaw/Hermes setup, choose the active provider (`template`, `anthropic`, or `google`), accept `api_key` or `auth_token` auth modes, create the active auth profile, generate `HELLOAGI_API_KEY` for the local service, and enable Telegram/Discord in the same flow.
+   The wizard can import an existing OpenClaw/Hermes setup, choose the active provider (`template`, `anthropic`, or `google`), accept `api_key` or `auth_token` auth modes, create the active auth profile, generate `HELLOAGI_API_KEY` for the local service, and enable Telegram, Discord, or local voice in the same flow.
 
    For scripted installs, the same setup can run without prompts:
 
@@ -522,7 +523,7 @@ event: response
 data: {"text": "Done! I've created...", "tool_calls": 3, "turns": 2}
 ```
 
-### Telegram & Discord
+### Telegram, Discord, and Voice
 
 ```bash
 export TELEGRAM_BOT_TOKEN=your-token
@@ -530,9 +531,23 @@ helloagi serve --telegram
 
 export DISCORD_BOT_TOKEN=your-token
 helloagi serve --discord
+
+helloagi serve --voice
+
+Then open `http://127.0.0.1:8787/voice/monitor` to see the built-in live voice indicator while the local voice channel is listening, thinking, or speaking.
 ```
 
-Full agent capabilities on every channel — same SRG governance, same tools, same personality.
+Full agent capabilities on every channel — same SRG governance, same tools, same personality. The voice channel routes reasoning through the normal HelloAGI provider stack and can use either local audio I/O or Gemini audio I/O.
+
+On Windows, the voice channel uses the built-in `System.Speech` APIs through PowerShell, so you do not need a `PyAudio` wheel. On macOS and Linux, the voice extra installs `SpeechRecognition` + `pyttsx3`, and your OS may still need a local microphone backend.
+
+To force a specific Gemini model for agent reasoning, set `HELLOAGI_GOOGLE_MODEL` in `.env`, for example `gemini-flash-latest` or `gemini-3.1-pro-preview`.
+To transcribe the microphone with Gemini Live, set `HELLOAGI_VOICE_INPUT_PROVIDER=gemini_live`.
+If the Live preview is unavailable, the channel falls back to `HELLOAGI_VOICE_GEMINI_INPUT_MODEL` for one-shot Gemini audio transcription.
+To synthesize spoken replies with Gemini instead of the local OS voice, set `HELLOAGI_VOICE_OUTPUT_PROVIDER=gemini_tts` and optionally tune `HELLOAGI_VOICE_GEMINI_TTS_MODEL` / `HELLOAGI_VOICE_GEMINI_TTS_VOICE`.
+To add audible “working on it” feedback while the agent is thinking or using tools, set `HELLOAGI_VOICE_WORK_SOUND=piano` (or `chime`, `pulse`, `off`).
+To personalize voice acknowledgements, set `HELLOAGI_OWNER_NAME`, and to shape delivery further, use `HELLOAGI_VOICE_GEMINI_TTS_STYLE`. Gemini TTS also supports inline audio tags like `[warmly]`, `[serious]`, and `[whispers]` inside the spoken transcript.
+By default, local voice now shares the same principal as local CLI (`local:default`), so memory carries across local text and voice. Override with `HELLOAGI_VOICE_PRINCIPAL_ID` if you intentionally want a separate voice profile.
 
 Telegram reminder scheduler settings:
 - `HELLOAGI_REMINDER_TICK_SECONDS` (default `5`)
@@ -593,7 +608,7 @@ src/agi_runtime/
 ├── skills/           # Skill crystallization and management
 ├── memory/           # Identity evolution, embeddings, compressor
 ├── api/              # HTTP server with SSE streaming
-├── channels/         # Telegram, Discord adapters
+├── channels/         # Telegram, Discord, and voice adapters
 ├── robustness/       # Circuit breakers, supervisor
 ├── diagnostics/      # Dashboard, scorecard, replay
 ├── models/           # Multi-model routing (speed/balanced/quality)

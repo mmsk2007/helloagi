@@ -2,8 +2,9 @@ import subprocess
 import sys
 import unittest
 import os
+import shutil
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 from agi_runtime.core.agent import HelloAGIAgent
 from agi_runtime.channels.telegram import _load_telegram_token
@@ -11,6 +12,14 @@ from agi_runtime.config.env import load_local_env, save_env_values
 
 
 ROOT = Path(__file__).resolve().parents[1]
+TMP_ROOT = ROOT / ".tmp-tests"
+TMP_ROOT.mkdir(exist_ok=True)
+
+
+def _make_scratch_dir() -> Path:
+    path = TMP_ROOT / f"cli-{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    return path
 
 
 class TestCLIContract(unittest.TestCase):
@@ -58,23 +67,25 @@ class TestCLIContract(unittest.TestCase):
         self.assertNotIn("file_write", info)
 
     def test_local_env_round_trip_for_telegram_token(self):
-        with TemporaryDirectory() as tmp:
-            env_path = Path(tmp) / ".env"
-            old = os.environ.pop("TELEGRAM_BOT_TOKEN", None)
-            try:
-                save_env_values({"TELEGRAM_BOT_TOKEN": "123:token"}, str(env_path))
-                load_local_env(str(env_path))
-                self.assertEqual(_load_telegram_token(), "123:token")
-            finally:
-                if old is None:
-                    os.environ.pop("TELEGRAM_BOT_TOKEN", None)
-                else:
-                    os.environ["TELEGRAM_BOT_TOKEN"] = old
+        tmp = _make_scratch_dir()
+        env_path = tmp / ".env"
+        old = os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+        try:
+            save_env_values({"TELEGRAM_BOT_TOKEN": "123:token"}, str(env_path))
+            load_local_env(str(env_path))
+            self.assertEqual(_load_telegram_token(), "123:token")
+        finally:
+            if old is None:
+                os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+            else:
+                os.environ["TELEGRAM_BOT_TOKEN"] = old
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_service_help_exposes_extension_flag(self):
         result = self.run_cli("service", "install", "--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--extension", result.stdout)
+        self.assertIn("--voice", result.stdout)
 
     def test_extensions_help_is_exposed(self):
         result = self.run_cli("extensions", "list")
@@ -101,6 +112,7 @@ class TestCLIContract(unittest.TestCase):
         result = self.run_cli("serve", "--help")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--require-auth", result.stdout)
+        self.assertIn("--voice", result.stdout)
 
 
 if __name__ == "__main__":

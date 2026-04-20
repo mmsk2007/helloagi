@@ -24,6 +24,12 @@ setup(
         'rich': ['rich>=13.0'],
         'telegram': ['python-telegram-bot>=20.0'],
         'discord': ['discord.py>=2.0'],
+        'voice': [
+            'google-genai>=1.0',
+            'sounddevice>=0.5',
+            "SpeechRecognition>=3.10; platform_system != 'Windows'",
+            "pyttsx3>=2.90; platform_system != 'Windows'",
+        ],
         'embeddings': ['google-genai>=1.0'],
         'claude-sdk': ['claude-agent-sdk>=0.1'],
         'all': [
@@ -31,6 +37,9 @@ setup(
             'python-telegram-bot>=20.0',
             'discord.py>=2.0',
             'google-genai>=1.0',
+            'sounddevice>=0.5',
+            "SpeechRecognition>=3.10; platform_system != 'Windows'",
+            "pyttsx3>=2.90; platform_system != 'Windows'",
             'claude-agent-sdk>=0.1',
         ],
         'dev': ['pytest>=7.0', 'pytest-asyncio>=0.21'],

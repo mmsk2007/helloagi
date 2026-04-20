@@ -19,6 +19,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse, parse_qs
 
+from agi_runtime.channels.voice_presence import voice_presence_store
 from agi_runtime.config.env import resolve_env_value
 from agi_runtime.core.agent import HelloAGIAgent
 from agi_runtime.config.settings import RuntimeSettings, load_settings
@@ -44,7 +45,14 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             return auth[7:] == self.api_key
-        return self.headers.get("X-API-Key", "") == self.api_key
+        if self.headers.get("X-API-Key", "") == self.api_key:
+            return True
+        query = parse_qs(urlparse(self.path).query)
+        for key in ("api_key", "token"):
+            values = query.get(key, [])
+            if values and values[0] == self.api_key:
+                return True
+        return False
 
     def _send_json(self, code: int, payload: dict):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -75,6 +83,12 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
 
         if path == "/health":
             return self._handle_health()
+        elif path == "/voice/state":
+            return self._handle_voice_state()
+        elif path == "/voice/events":
+            return self._handle_voice_events()
+        elif path == "/voice/monitor":
+            return self._handle_voice_monitor()
         elif path == "/tools":
             return self._handle_tools()
         elif path == "/skills":
@@ -113,6 +127,7 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
     def _handle_health(self):
         uptime = time.time() - self._stats["started_at"]
         tools = self.agent._list_allowed_tools()
+        voice_state = voice_presence_store().snapshot()
         self._send_json(200, {
             "ok": True,
             "service": "helloagi",
@@ -128,7 +143,55 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
             "auth_env_key": self.auth_env_key,
             "uptime_seconds": round(uptime),
             "total_requests": self._stats["requests"],
+            "voice": {
+                "state": voice_state["state"],
+                "active": voice_state["active"],
+                "wake_word": voice_state["wake_word"],
+                "updated_at": voice_state["updated_at"],
+            },
         })
+
+    def _handle_voice_state(self):
+        self._send_json(200, {"voice": voice_presence_store().snapshot()})
+
+    def _handle_voice_monitor(self):
+        body = _voice_monitor_html(auth_required=self.auth_required).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_voice_events(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        store = voice_presence_store()
+        snapshot = store.snapshot()
+        version = int(snapshot.get("version", 0))
+
+        def send(event_type: str, payload: dict):
+            body = json.dumps(payload, ensure_ascii=False)
+            self.wfile.write(f"event: {event_type}\ndata: {body}\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+        try:
+            send("voice", snapshot)
+            while True:
+                changed = store.wait_for_change(version, timeout=15.0)
+                if changed is None:
+                    self.wfile.write(b": keepalive\n\n")
+                    self.wfile.flush()
+                    continue
+                version = int(changed.get("version", version))
+                send("voice", changed)
+        except (BrokenPipeError, ConnectionResetError):
+            return
 
     def _handle_tools(self):
         tools = self.agent._list_allowed_tools()
@@ -327,6 +390,9 @@ def run_server(
     print(f"     GET  /health       — Service health")
     print(f"     POST /chat         — Chat (JSON)")
     print(f"     POST /chat/stream  — Chat (SSE streaming)")
+    print(f"     GET  /voice/state  — Voice status JSON")
+    print(f"     GET  /voice/events — Voice status SSE")
+    print(f"     GET  /voice/monitor — Browser voice monitor")
     print(f"     GET  /tools        — Available tools")
     print(f"     GET  /skills       — Learned skills")
     print(f"     GET  /identity     — Agent identity")
@@ -338,3 +404,203 @@ def run_server(
     except KeyboardInterrupt:
         print("\nShutting down...")
         srv.shutdown()
+
+
+def _voice_monitor_html(*, auth_required: bool) -> str:
+    auth_note = (
+        "This server requires auth. Open this page with ?api_key=YOUR_TOKEN if needed."
+        if auth_required
+        else "No auth token required on this server."
+    )
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HelloAGI Voice Monitor</title>
+  <style>
+    :root {{
+      --bg: #0d1b1e;
+      --panel: #13262b;
+      --text: #e8f1ee;
+      --muted: #8ea8a2;
+      --idle: #5f7d77;
+      --listening: #31c48d;
+      --thinking: #f59e0b;
+      --speaking: #38bdf8;
+      --error: #f87171;
+      --approval: #f97316;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background:
+        radial-gradient(circle at top, rgba(56,189,248,0.18), transparent 32%),
+        radial-gradient(circle at bottom, rgba(49,196,141,0.16), transparent 28%),
+        var(--bg);
+      color: var(--text);
+      font: 16px/1.5 "Segoe UI", system-ui, sans-serif;
+      padding: 24px;
+    }}
+    .panel {{
+      width: min(780px, 100%);
+      background: rgba(19, 38, 43, 0.88);
+      border: 1px solid rgba(232,241,238,0.10);
+      border-radius: 24px;
+      padding: 28px;
+      box-shadow: 0 30px 80px rgba(0,0,0,0.35);
+      backdrop-filter: blur(18px);
+    }}
+    .eyebrow {{
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      font-size: 12px;
+      margin-bottom: 8px;
+    }}
+    h1 {{
+      margin: 0 0 18px;
+      font-size: clamp(28px, 5vw, 48px);
+      line-height: 1;
+    }}
+    .orb-wrap {{
+      display: grid;
+      place-items: center;
+      margin: 22px 0 28px;
+    }}
+    .orb {{
+      width: 168px;
+      aspect-ratio: 1;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.35), transparent 35%), var(--idle);
+      box-shadow: 0 0 0 0 rgba(95,125,119,0.35);
+      transition: background 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+    }}
+    .orb.listening {{
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.48), transparent 35%), var(--listening);
+      animation: pulse 1.2s infinite;
+    }}
+    .orb.transcribing, .orb.thinking {{
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.48), transparent 35%), var(--thinking);
+      animation: pulse 1.0s infinite;
+    }}
+    .orb.speaking {{
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.52), transparent 35%), var(--speaking);
+      animation: pulse 0.8s infinite;
+      transform: scale(1.04);
+    }}
+    .orb.approval {{
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.52), transparent 35%), var(--approval);
+      animation: pulse 1.0s infinite;
+    }}
+    .orb.error {{
+      background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.42), transparent 35%), var(--error);
+      box-shadow: 0 0 0 12px rgba(248,113,113,0.12);
+    }}
+    @keyframes pulse {{
+      0% {{ box-shadow: 0 0 0 0 rgba(255,255,255,0.18); }}
+      70% {{ box-shadow: 0 0 0 28px rgba(255,255,255,0); }}
+      100% {{ box-shadow: 0 0 0 0 rgba(255,255,255,0); }}
+    }}
+    .status {{
+      font-size: 24px;
+      font-weight: 700;
+      margin: 0 0 6px;
+      text-transform: capitalize;
+    }}
+    .detail {{
+      margin: 0 0 18px;
+      color: var(--muted);
+      min-height: 24px;
+    }}
+    .meta {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }}
+    .card {{
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 16px;
+      padding: 14px;
+    }}
+    .label {{
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }}
+    .value {{
+      font-size: 16px;
+      word-break: break-word;
+    }}
+    .foot {{
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 18px;
+    }}
+  </style>
+</head>
+<body>
+  <main class="panel">
+    <div class="eyebrow">HelloAGI Local Voice</div>
+    <h1>Voice Monitor</h1>
+    <div class="orb-wrap"><div id="orb" class="orb"></div></div>
+    <div class="status" id="status">Inactive</div>
+    <p class="detail" id="detail">Waiting for voice activity.</p>
+    <section class="meta">
+      <div class="card"><span class="label">Wake Word</span><div class="value" id="wakeWord">lana</div></div>
+      <div class="card"><span class="label">Last Heard</span><div class="value" id="lastHeard">—</div></div>
+      <div class="card"><span class="label">Last Spoken</span><div class="value" id="lastSpoken">—</div></div>
+      <div class="card"><span class="label">Updated</span><div class="value" id="updatedAt">—</div></div>
+    </section>
+    <p class="foot">{auth_note}</p>
+  </main>
+  <script>
+    const qs = new URLSearchParams(window.location.search);
+    const suffix = qs.toString() ? `?${{qs.toString()}}` : "";
+    const orb = document.getElementById("orb");
+    const statusEl = document.getElementById("status");
+    const detailEl = document.getElementById("detail");
+    const wakeWordEl = document.getElementById("wakeWord");
+    const lastHeardEl = document.getElementById("lastHeard");
+    const lastSpokenEl = document.getElementById("lastSpoken");
+    const updatedAtEl = document.getElementById("updatedAt");
+
+    function formatTime(ts) {{
+      if (!ts) return "—";
+      return new Date(ts * 1000).toLocaleTimeString();
+    }}
+
+    function render(payload) {{
+      const state = (payload.state || "inactive").toLowerCase();
+      orb.className = `orb ${{state}}`;
+      statusEl.textContent = state;
+      detailEl.textContent = payload.detail || "Waiting for voice activity.";
+      wakeWordEl.textContent = payload.wake_word || "lana";
+      lastHeardEl.textContent = payload.last_heard || "—";
+      lastSpokenEl.textContent = payload.last_spoken || "—";
+      updatedAtEl.textContent = formatTime(payload.updated_at);
+    }}
+
+    fetch(`/voice/state${{suffix}}`)
+      .then((r) => r.json())
+      .then((data) => render(data.voice || {{}}))
+      .catch(() => {{}});
+
+    const source = new EventSource(`/voice/events${{suffix}}`);
+    source.addEventListener("voice", (event) => {{
+      render(JSON.parse(event.data));
+    }});
+    source.onerror = () => {{
+      detailEl.textContent = "Waiting for voice event stream...";
+    }};
+  </script>
+</body>
+</html>"""

@@ -1,30 +1,57 @@
 import os
+import shutil
 import unittest
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from uuid import uuid4
 
 from agi_runtime.extensions.manager import ExtensionManager
+
+ROOT = Path(__file__).resolve().parents[1]
+TMP_ROOT = ROOT / ".tmp-tests"
+TMP_ROOT.mkdir(exist_ok=True)
+
+
+def _make_scratch_dir() -> Path:
+    path = TMP_ROOT / f"ext-{uuid4().hex}"
+    path.mkdir(parents=True, exist_ok=False)
+    return path
 
 
 class TestExtensionsRuntime(unittest.TestCase):
     def test_enable_and_disable_extension(self):
-        with TemporaryDirectory() as tmp:
-            manager = ExtensionManager(str(Path(tmp) / "extensions_state.json"))
+        tmp = _make_scratch_dir()
+        try:
+            manager = ExtensionManager(str(tmp / "extensions_state.json"))
             enabled = manager.enable("telegram")
             self.assertTrue(enabled.enabled)
             disabled = manager.disable("telegram")
             self.assertFalse(disabled.enabled)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_voice_extension_manifest_is_exposed(self):
+        tmp = _make_scratch_dir()
+        try:
+            manager = ExtensionManager(str(tmp / "extensions_state.json"))
+            status = manager.status("voice")
+            self.assertEqual(status.name, "voice")
+            self.assertEqual(status.category, "channel")
+            self.assertIn("helloagi[voice]", status.extras)
+            self.assertIsInstance(status.notes, list)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_doctor_reports_missing_dependencies_or_env(self):
-        with TemporaryDirectory() as tmp:
-            manager = ExtensionManager(str(Path(tmp) / "extensions_state.json"))
-            old = os.environ.pop("DISCORD_BOT_TOKEN", None)
-            try:
-                manager.enable("discord")
-                report = manager.doctor(enabled_only=True)
-                self.assertEqual(report["enabled"], 1)
-                self.assertEqual(report["extensions"][0]["name"], "discord")
-                self.assertIn("DISCORD_BOT_TOKEN", report["extensions"][0]["missing_env"])
-            finally:
-                if old is not None:
-                    os.environ["DISCORD_BOT_TOKEN"] = old
+        tmp = _make_scratch_dir()
+        manager = ExtensionManager(str(tmp / "extensions_state.json"))
+        old = os.environ.pop("DISCORD_BOT_TOKEN", None)
+        try:
+            manager.enable("discord")
+            report = manager.doctor(enabled_only=True)
+            self.assertEqual(report["enabled"], 1)
+            self.assertEqual(report["extensions"][0]["name"], "discord")
+            self.assertIn("DISCORD_BOT_TOKEN", report["extensions"][0]["missing_env"])
+        finally:
+            if old is not None:
+                os.environ["DISCORD_BOT_TOKEN"] = old
+            shutil.rmtree(tmp, ignore_errors=True)

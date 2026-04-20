@@ -19,6 +19,7 @@ import shutil
 import sys
 
 from agi_runtime.auth.profiles import AuthProfileManager
+from agi_runtime.channels.voice import probe_voice_runtime
 from agi_runtime.config.env import load_local_env, save_env_values
 from agi_runtime.config.providers import provider_env_snapshot, resolve_provider_credential
 from agi_runtime.config.settings import RuntimeSettings, load_settings, save_settings
@@ -76,6 +77,7 @@ class ChannelKeys:
     telegram_enabled: bool = False
     discord_bot_token: bool = False
     discord_enabled: bool = False
+    voice_enabled: bool = False
 
 
 @dataclass
@@ -223,6 +225,9 @@ def _detect_environment() -> dict:
         env["has_discord_lib"] = True
     except ImportError:
         env["has_discord_lib"] = False
+    voice_probe = probe_voice_runtime()
+    env["has_voice_lib"] = bool(voice_probe.get("available"))
+    env["voice_runtime_notes"] = list(voice_probe.get("notes", []))
     try:
         import rich  # noqa: F401
         env["has_rich"] = True
@@ -551,6 +556,12 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
         _ok("Discord library available")
     else:
         _warn("Discord library missing. Run: pip install 'helloagi[discord]'")
+    if env.get("has_voice_lib"):
+        _ok("Voice channel runtime available")
+        for note in env.get("voice_runtime_notes", []):
+            _info(str(note))
+    else:
+        _warn("Voice channel libraries missing. Run: pip install 'helloagi[voice]'")
 
     if options.import_source:
         migration_source, env = _apply_import_source(options.import_source)
@@ -685,6 +696,9 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     discord_token = os.environ.get("DISCORD_BOT_TOKEN", "")
     if discord_enabled and not discord_token and not options.non_interactive:
         discord_token = _secret_prompt("DISCORD_BOT_TOKEN")
+    voice_enabled = "voice" in requested_extensions
+    if not options.non_interactive:
+        voice_enabled = _yes_no_prompt("Enable local voice channel", env.get("has_voice_lib"))
 
     google_ready = primary_provider == "google" and bool(provider_secret)
     embeddings_enabled = "embeddings" in requested_extensions
@@ -699,6 +713,10 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
         extension_manager.enable("discord")
     else:
         extension_manager.disable("discord")
+    if voice_enabled:
+        extension_manager.enable("voice")
+    else:
+        extension_manager.disable("voice")
     if embeddings_enabled:
         extension_manager.enable("embeddings")
     else:
@@ -716,7 +734,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     if service_token:
         os.environ["HELLOAGI_API_KEY"] = service_token
         _ok("Reusing existing HELLOAGI_API_KEY")
-    elif runtime_mode in {"hybrid", "service"} or telegram_enabled or discord_enabled:
+    elif runtime_mode in {"hybrid", "service"} or telegram_enabled or discord_enabled or voice_enabled:
         should_generate = options.non_interactive or _yes_no_prompt("Generate a HelloAGI service auth token now", True)
         if should_generate:
             service_token = os.urandom(24).hex()
@@ -733,7 +751,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
 
     prepare_service = False
     service_install_state = None
-    if runtime_mode != "cli" or telegram_enabled or discord_enabled:
+    if runtime_mode != "cli" or telegram_enabled or discord_enabled or voice_enabled:
         prepare_service = options.non_interactive or _yes_no_prompt("Prepare background service now", runtime_mode != "cli")
         if prepare_service:
             try:
@@ -824,6 +842,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
             telegram_enabled=telegram_enabled,
             discord_bot_token=bool(discord_token or os.environ.get("DISCORD_BOT_TOKEN")),
             discord_enabled=discord_enabled,
+            voice_enabled=voice_enabled,
         ),
         service=ServiceSetup(
             runtime_mode=runtime_mode,
@@ -871,6 +890,8 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
         print(f"    {CYAN}$ {NC}{BOLD}helloagi serve --telegram{NC}")
     if discord_enabled:
         print(f"    {CYAN}$ {NC}{BOLD}helloagi serve --discord{NC}")
+    if voice_enabled:
+        print(f"    {CYAN}$ {NC}{BOLD}helloagi serve --voice{NC}")
     print(f"    {CYAN}$ {NC}{BOLD}helloagi onboard-status{NC}")
     print()
     if primary_provider == "template":
@@ -918,8 +939,10 @@ def status(path: str = "helloagi.onboard.json"):
     print("  Channels:")
     telegram = channels.get("telegram_enabled", False) or "telegram" in extensions_enabled or bool(os.environ.get("TELEGRAM_BOT_TOKEN"))
     discord = channels.get("discord_enabled", False) or "discord" in extensions_enabled or bool(os.environ.get("DISCORD_BOT_TOKEN"))
+    voice = channels.get("voice_enabled", False) or "voice" in extensions_enabled
     print(f"    Telegram: {'enabled' if telegram else 'disabled'}")
     print(f"    Discord:  {'enabled' if discord else 'disabled'}")
+    print(f"    Voice:    {'enabled' if voice else 'disabled'}")
     print("  Service:")
     token_state = f"{GREEN}configured{NC}" if service.get("auth_token") or bool(os.environ.get("HELLOAGI_API_KEY")) else f"{DIM}not configured{NC}"
     prepared_state = f"{GREEN}prepared{NC}" if service.get("background_service") else f"{DIM}not prepared{NC}"

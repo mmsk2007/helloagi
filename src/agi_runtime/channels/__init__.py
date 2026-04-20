@@ -1,1 +1,1 @@
-"""HelloAGI Channel Adapters — Telegram, Discord, and more."""
+"""HelloAGI channel adapters — Telegram, Discord, voice, and more."""
