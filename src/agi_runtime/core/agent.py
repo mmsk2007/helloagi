@@ -158,6 +158,171 @@ class HelloAGIAgent:
         """Return the canonical profile principal for memory and preferences."""
         return self.principals.resolve_profile_id(self.current_principal())
 
+    def _active_channel_name(self) -> str:
+        """Return a compact channel name for prompt shaping."""
+        if self._active_channel is None:
+            return "local"
+        channel_class_name = getattr(self._active_channel.__class__, "__name__", "") or "local"
+        if channel_class_name.endswith("Channel"):
+            channel_class_name = channel_class_name[:-7]
+        return channel_class_name.strip().lower() or "local"
+
+    def _recent_user_messages(self, limit: int = 4) -> List[str]:
+        """Return recent plain-text user messages from the current history."""
+        messages: List[str] = []
+        for message in self._history:
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                messages.append(content.strip())
+        return messages[-limit:]
+
+    def _is_continuation_message(self, text: str) -> bool:
+        """Heuristic for short approval/continuation replies."""
+        normalized = " ".join((text or "").strip().lower().split())
+        if not normalized:
+            return False
+        exact_matches = {
+            "continue",
+            "go on",
+            "carry on",
+            "proceed",
+            "do it",
+            "yes",
+            "yep",
+            "yeah",
+            "ok",
+            "okay",
+            "sure",
+            "sounds good",
+            "keep going",
+        }
+        if normalized in exact_matches:
+            return True
+        tokens = normalized.split()
+        continuation_tokens = {
+            "continue",
+            "go",
+            "on",
+            "carry",
+            "proceed",
+            "do",
+            "it",
+            "yes",
+            "yep",
+            "yeah",
+            "ok",
+            "okay",
+            "sure",
+            "keep",
+            "going",
+        }
+        return len(tokens) <= 3 and all(token in continuation_tokens for token in tokens)
+
+    def _truncate_prompt_text(self, text: str, limit: int = 220) -> str:
+        """Clip prompt context lines to keep the system prompt focused."""
+        cleaned = " ".join((text or "").split())
+        if len(cleaned) <= limit:
+            return cleaned
+        return cleaned[: limit - 3] + "..."
+
+    def _build_policy_pack_section(self) -> Optional[str]:
+        """Describe the current operating posture for the model."""
+        traits = ", ".join(self.policy_pack.identity_traits) if self.policy_pack.identity_traits else "none"
+        lines = [
+            f"Active pack: {self.policy_pack.name}.",
+            f"Model tier bias: {self.policy_pack.model_tier}.",
+            f"Traits to embody: {traits}.",
+            f"Autonomy budget: up to {self.max_turns} turns.",
+        ]
+        return "\n".join(lines)
+
+    def _build_operating_rules_section(self) -> str:
+        """Core task-control rules inspired by stronger coding-agent prompts."""
+        lines = [
+            "- Prioritize the latest concrete user objective over adjacent ideas.",
+            "- Short replies like 'continue', 'yes', or 'do it' usually mean continue the active task, not start a new one.",
+            "- Before pivoting topics, verify that the new work is explicitly requested or required to finish the current task.",
+            "- For non-trivial work, internally break the task into a few concrete steps and execute them in order.",
+            "- Use tools to gather evidence, make progress, and verify outcomes instead of narrating hypotheticals.",
+            "- If blocked, ask one focused question or report the blocker plainly rather than drifting.",
+        ]
+        return "\n".join(lines)
+
+    def _build_response_contract_section(self) -> str:
+        """How the assistant should behave while work is in progress."""
+        channel_name = self._active_channel_name()
+        lines = [
+            "- Acknowledge the user's intent quickly before long-running work.",
+            "- During long tasks, provide brief progress updates about the current action or blocker instead of going silent.",
+            "- Keep progress updates tied to the active task; do not improvise new objectives in those updates.",
+            "- Separate visible status updates from hidden reasoning; never expose chain-of-thought.",
+            "- Final answers should state what was completed, what is still blocked, and what happens next.",
+        ]
+        if channel_name in {"voice", "telegram", "discord"}:
+            lines.insert(
+                1,
+                f"- This turn originates from the {channel_name} channel, so latency is user-visible: keep acknowledgements and progress updates short and timely.",
+            )
+        return "\n".join(lines)
+
+    def _build_active_task_section(self) -> Optional[str]:
+        """Summarize the live objective so the model stays on the same task."""
+        recent_user_messages = self._recent_user_messages(limit=5)
+        if not recent_user_messages:
+            return None
+
+        latest_message = recent_user_messages[-1]
+        anchored_objective = latest_message
+        continuation_note = ""
+        if self._is_continuation_message(latest_message):
+            for candidate in reversed(recent_user_messages[:-1]):
+                if not self._is_continuation_message(candidate):
+                    anchored_objective = candidate
+                    continuation_note = (
+                        "Latest user message is a continuation or approval. Treat the current objective as the anchored request below unless the user explicitly changes topic."
+                    )
+                    break
+
+        recent_requests = " | ".join(self._truncate_prompt_text(message, limit=120) for message in recent_user_messages)
+        lines = [
+            f"Principal: {self.current_profile_principal()}.",
+            f"Channel: {self._active_channel_name()}.",
+            f"Current objective: {self._truncate_prompt_text(anchored_objective)}",
+            f"Latest user message: {self._truncate_prompt_text(latest_message)}",
+            f"Recent user requests: {recent_requests}",
+            "Stay on this objective until it is complete, blocked, or explicitly superseded.",
+        ]
+        if continuation_note:
+            lines.append(continuation_note)
+        return "\n".join(lines)
+
+    def _build_sub_agent_system_prompt(self, goal: str, context: str, max_turns: int) -> str:
+        """Prompt for delegated/background execution work."""
+        lines = [
+            f"You are an execution sub-agent working for {self.identity.state.name}.",
+            "You are not the primary conversational assistant.",
+            "Complete exactly the delegated goal and return a compact execution summary.",
+            "",
+            "<execution-contract>",
+            "- Stay narrowly focused on the delegated goal.",
+            "- Do not start adjacent work or reframe the task.",
+            "- Use tools when needed, but keep the path efficient and evidence-based.",
+            "- If blocked, state the blocker clearly and stop instead of improvising.",
+            "- Do not add personality filler, onboarding, or general chat.",
+            "- Final output format: status, concrete result, blockers (if any), next recommended step.",
+            f"- Turn budget: at most {min(max_turns, 15)} turns.",
+            "</execution-contract>",
+            "",
+            "<delegated-task>",
+            f"Goal: {self._truncate_prompt_text(goal or 'Complete the delegated task.', limit=300)}",
+        ]
+        if context.strip():
+            lines.append(f"Context: {self._truncate_prompt_text(context, limit=500)}")
+        lines.append("</delegated-task>")
+        return "\n".join(lines)
+
     def set_active_channel(self, channel: Any, channel_id: Optional[str]) -> None:
         """Bind the channel that originated the current turn so outbound tools
         (send_file, send_image) can deliver attachments back to the same chat.
@@ -282,6 +447,23 @@ class HelloAGIAgent:
             "- Keep responses concise unless the user asks for depth.",
         ]
 
+        policy_pack_section = self._build_policy_pack_section()
+        if policy_pack_section:
+            parts.append("")
+            parts.append("<policy-pack>")
+            parts.append(policy_pack_section)
+            parts.append("</policy-pack>")
+
+        parts.append("")
+        parts.append("<operating-rules>")
+        parts.append(self._build_operating_rules_section())
+        parts.append("</operating-rules>")
+
+        parts.append("")
+        parts.append("<response-contract>")
+        parts.append(self._build_response_contract_section())
+        parts.append("</response-contract>")
+
         # Inject grounded time awareness (date, clock, timezone, UTC anchor).
         # Per-principal tz overrides the runtime setting, which overrides host-local.
         principal_state = self.principals.get(self.current_profile_principal())
@@ -293,6 +475,13 @@ class HelloAGIAgent:
         parts.append("<time-context>")
         parts.append(time_block)
         parts.append("</time-context>")
+
+        active_task = self._build_active_task_section()
+        if active_task:
+            parts.append("")
+            parts.append("<active-task>")
+            parts.append(active_task)
+            parts.append("</active-task>")
 
         # Inject personality and growth awareness
         personality = build_personality_prompt(
@@ -532,12 +721,10 @@ class HelloAGIAgent:
             blocked = {"delegate_task", "skill_create", "skill_invoke"}
             tools = [s for s in self._get_tool_schemas() if s["name"] not in blocked]
 
-        sub_system = (
-            f"You are a specialist sub-agent of {self.identity.state.name}.\n"
-            f"Your task: {goal}\n"
-            f"Context: {context}\n\n"
-            "Complete the task efficiently. Be concise in your final response.\n"
-            "You have a limited number of turns — focus on the goal."
+        sub_system = self._build_sub_agent_system_prompt(
+            goal=goal,
+            context=context,
+            max_turns=max_turns,
         )
 
         sub_history = [{"role": "user", "content": f"Task: {goal}\n\nContext: {context}"}]
