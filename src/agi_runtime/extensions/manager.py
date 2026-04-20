@@ -155,7 +155,13 @@ class ExtensionManager:
         manifest = self.require(name)
         enabled = manifest.name in self.enabled_names()
         missing_env = [env_name for env_name in manifest.required_env if not os.environ.get(env_name)]
-        missing_modules = [module_name for module_name in manifest.python_modules if find_spec(module_name) is None]
+        missing_modules = []
+        for module_name in manifest.python_modules:
+            try:
+                if find_spec(module_name) is None:
+                    missing_modules.append(module_name)
+            except ModuleNotFoundError:
+                missing_modules.append(module_name)
         notes: list[str] = []
         if manifest.name == "voice":
             from agi_runtime.channels.voice import probe_voice_runtime
