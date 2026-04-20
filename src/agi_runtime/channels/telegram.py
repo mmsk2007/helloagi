@@ -80,9 +80,12 @@ class TelegramChannel(BaseChannel):
         self._pending_approvals: dict = {}
         # user_id -> {"step": "awaiting_name" | "awaiting_tz", ...} for first-run flow.
         self._wizard_state: dict = {}
+        # principal_id -> {"started_at": monotonic, "preview": short text}
+        self._inflight_by_principal: dict[str, dict[str, Any]] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._reminder_service = ReminderService()
         self._reminder_ticker: ReminderTicker | None = None
+        self._typing_interval_seconds = 4.0
 
     def _principal_id_for_update(self, update) -> str:
         """Build a stable principal id for Telegram chats."""
@@ -521,6 +524,19 @@ class TelegramChannel(BaseChannel):
             preview = preview[:77] + "..."
         logger.info("msg in  | pid=%s | %s", principal_id, preview)
 
+        busy = self._inflight_by_principal.get(principal_id)
+        if busy:
+            import time as _time
+
+            elapsed = max(_time.monotonic() - float(busy.get("started_at", _time.monotonic())), 0.0)
+            current_preview = str(busy.get("preview", "your previous request")).strip() or "your previous request"
+            await update.message.reply_text(
+                f"⏳ I'm still working on your previous task ({elapsed:.0f}s so far): {current_preview}\n\n"
+                "I can't safely start a second run in this chat yet. Wait for the current one to finish."
+            )
+            logger.info("msg busy| pid=%s | rejected overlap while previous run active", principal_id)
+            return
+
         # First-run: route through the onboarding wizard until it completes.
         if not state.onboarded:
             if user_id not in self._wizard_state:
@@ -532,8 +548,9 @@ class TelegramChannel(BaseChannel):
                 logger.info("wizard  | pid=%s | step=%s", principal_id, self._wizard_state.get(user_id, {}).get("step", "done"))
                 return
 
-        # Show typing indicator
+        # Show typing indicator immediately, then keep it alive for long-running tasks.
         await context.bot.send_chat_action(chat_id=int(chat_id), action="typing")
+        typing_task = asyncio.create_task(self._typing_keepalive(context.bot, int(chat_id)))
 
         on_user_input = self._build_approval_handler(
             chat_id=int(chat_id), context=context, principal_id=principal_id
@@ -543,6 +560,7 @@ class TelegramChannel(BaseChannel):
 
         import time as _time
         t0 = _time.monotonic()
+        self._inflight_by_principal[principal_id] = {"started_at": t0, "preview": preview}
         try:
             # Run sync think() off the asyncio loop — calling think() directly blocks PTB's
             # event loop (think() uses future.result() when a loop is already running).
@@ -597,7 +615,24 @@ class TelegramChannel(BaseChannel):
             await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
 
         finally:
+            typing_task.cancel()
+            try:
+                await typing_task
+            except asyncio.CancelledError:
+                pass
+            self._inflight_by_principal.pop(principal_id, None)
             self.agent.on_user_input = original_input
+
+    async def _typing_keepalive(self, bot, chat_id: int):
+        """Keep Telegram's typing indicator visible during long-running tasks."""
+        try:
+            while True:
+                await asyncio.sleep(self._typing_interval_seconds)
+                await bot.send_chat_action(chat_id=chat_id, action="typing")
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.debug("Telegram typing keepalive stopped: %s", exc)
 
     def _think_for_principal(self, principal_id: str, text: str):
         self.agent.set_principal(principal_id)

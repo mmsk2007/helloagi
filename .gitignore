@@ -10,7 +10,7 @@ src/*.egg-info/
 .env
 .env.*
 helloagi.json
-memory/
+/memory/
 /voice.wav
 /voice.mp3
 /voice.ogg
@@ -20,6 +20,12 @@ memory/
 /voice-*.ogg
 /voice-*.mp3
 /voice-*.m4a
+/History_Copy
+/temp_profile/
+/chrome_profile/
+/browser_profile/
+/playwright/
+/user-data-dir/
 
 docs/daily-research/
 helloagi.onboard.json
