@@ -962,6 +962,171 @@ class HelloAGIAgent:
         finally:
             self._think_soft_deadline = None
 
+    def _tail_history_for_synthesis(self, max_messages: int = 48) -> List[dict]:
+        """Last N history entries to stay within model limits while keeping recent tool context."""
+        h = self._history
+        if not h:
+            return []
+        if len(h) <= max_messages:
+            return list(h)
+        return list(h[-max_messages:])
+
+    def _synthesis_nudge_user_content(self, user_input: str) -> str:
+        return (
+            "[Tool budget exhausted — you must not use tools.]\n"
+            "Answer the user in clear prose only, using information already present in this "
+            "conversation (search results, fetches, prior reasoning). Be concise. If the thread does "
+            "not contain enough reliable information, say so honestly in one or two sentences.\n\n"
+            f"User's request:\n{user_input}"
+        )
+
+    async def _synthesize_claude_text_only(self, user_input: str, system_prompt: str) -> str:
+        """One non-tool call to produce a user-visible answer when the main loop hit max turns."""
+        if not self._claude:
+            return ""
+        messages = self._tail_history_for_synthesis(48)
+        messages = messages + [
+            {"role": "user", "content": self._synthesis_nudge_user_content(user_input)},
+        ]
+        try:
+            response = self._claude.messages.create(
+                model=self._select_model(user_input),
+                max_tokens=min(8192, self.MAX_OUTPUT_TOKENS),
+                system=system_prompt,
+                messages=messages,
+            )
+        except Exception as e:
+            self.journal.write("synthesis_after_max_turns", {"ok": False, "provider": "anthropic", "error": str(e)[:500]})
+            return ""
+
+        text_parts: List[str] = []
+        for block in response.content:
+            if block.type == "text":
+                text_parts.append(block.text)
+        out = "\n".join(text_parts).strip()
+        self.journal.write("synthesis_after_max_turns", {"ok": bool(out), "provider": "anthropic", "chars": len(out)})
+        return out
+
+    def _history_plaintext_for_gemini_synthesis(self, max_total: int = 200_000) -> str:
+        """Flatten Claude-style _history into plain text for a no-tools Gemini call.
+
+        Re-using native Gemini ``contents`` with function_call / function_response parts
+        alongside a config without tools causes 400 Bad Request; a single user blob avoids that.
+        """
+        chunks: List[str] = []
+        for m in self._history:
+            role = (m.get("role") or "?").strip().upper()
+            c = m.get("content")
+            if isinstance(c, str) and c.strip():
+                chunks.append(f"=== {role} ===\n{c.strip()}\n")
+                continue
+            if isinstance(c, list):
+                segs: List[str] = []
+                for item in c:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("type") != "tool_result":
+                        continue
+                    tid = item.get("tool_use_id", "")
+                    body = item.get("content", "")
+                    if not isinstance(body, str):
+                        body = str(body)
+                    cap = 12_000
+                    if len(body) > cap:
+                        body = body[:cap] + "\n…(tool output truncated)"
+                    segs.append(f"[tool_result {tid}]\n{body}")
+                if segs:
+                    chunks.append(f"=== {role} (TOOL OUTPUTS) ===\n" + "\n\n".join(segs) + "\n")
+        blob = "\n".join(chunks).strip()
+        if len(blob) <= max_total:
+            return blob
+        marker = "\n…[earlier session transcript omitted; tail follows]\n"
+        tail_len = max_total - len(marker)
+        if tail_len < 1000:
+            return blob[-max_total:]
+        return marker + blob[-tail_len:]
+
+    async def _synthesize_gemini_text_only(self, user_input: str, system_prompt: str, model_id: str) -> str:
+        """One generate_content call without function-calling when the main loop hit max turns."""
+        if not self._gemini_client:
+            return ""
+        from google.genai import types as gtypes
+        from agi_runtime.llm.gemini_adapter import response_text_and_calls, genai_types_available
+        from agi_runtime.models.gemini_router import GEMINI_FALLBACK_STABLE
+
+        if not genai_types_available():
+            return ""
+
+        transcript = self._history_plaintext_for_gemini_synthesis()
+        if not transcript.strip():
+            transcript = "(No transcript text captured in this session.)"
+        preamble = (
+            "The following is a plain-text transcript of an assistant session that reached its "
+            "tool-call turn limit. Answer the user's request using only this material; do not "
+            "invent tool runs. If the transcript lacks enough to answer, say so briefly.\n\n"
+        )
+        package = preamble + transcript + "\n\n---\n" + self._synthesis_nudge_user_content(user_input)
+        if len(package) > 900_000:
+            package = package[:900_000] + "\n…(package truncated)"
+
+        sys_inst = system_prompt if len(system_prompt) <= 32000 else system_prompt[:32000] + "\n…(truncated)"
+        contents_syn = [
+            gtypes.Content(role="user", parts=[gtypes.Part.from_text(text=package)]),
+        ]
+        try:
+            config = gtypes.GenerateContentConfig(
+                system_instruction=sys_inst,
+                max_output_tokens=min(8192, self.MAX_OUTPUT_TOKENS),
+                automatic_function_calling=gtypes.AutomaticFunctionCallingConfig(disable=True),
+            )
+        except Exception:
+            try:
+                config = gtypes.GenerateContentConfig(
+                    system_instruction=sys_inst,
+                    max_output_tokens=min(8192, self.MAX_OUTPUT_TOKENS),
+                )
+            except Exception:
+                return ""
+
+        async def _one(mid: str):
+            return await self._gemini_client.models.generate_content(
+                model=mid,
+                contents=contents_syn,
+                config=config,
+            )
+
+        response = None
+        models_to_try: List[str] = []
+        for m in (model_id, GEMINI_FALLBACK_STABLE):
+            if m and m not in models_to_try:
+                models_to_try.append(m)
+        for mid in models_to_try:
+            try:
+                response = await _one(mid)
+                break
+            except Exception as e:
+                self.journal.write(
+                    "synthesis_after_max_turns",
+                    {"ok": False, "provider": "google", "model": mid, "error": str(e)[:500]},
+                )
+        if response is None:
+            return ""
+
+        plain, raw_calls = response_text_and_calls(response)
+        if raw_calls:
+            self.journal.write("synthesis_after_max_turns", {"ok": False, "provider": "google", "error": "unexpected_function_calls"})
+            return (plain or "").strip()
+        out = (plain or "").strip()
+        self.journal.write("synthesis_after_max_turns", {"ok": bool(out), "provider": "google", "chars": len(out)})
+        return out
+
+    def _message_after_max_turns(self, user_input: str, total_tool_calls: int, turns_used: int) -> str:
+        return (
+            f"I've used all {self.max_turns} turns working on your request. "
+            f"Made {total_tool_calls} tool call(s) across {turns_used} turn(s), so I could not finish "
+            f"in the normal loop. Your question was: {user_input[:200]!r}."
+        )
+
     async def _think_async_claude(
         self, user_input: str, gov: GovernanceResult, tools: List[dict], system_prompt: str, principal_id: str
     ) -> AgentResponse:
@@ -1257,11 +1422,19 @@ class HelloAGIAgent:
                 self._history = await self.compressor.compress(self._history)
                 self.journal.write("context_compressed", {"new_length": len(self._history)})
 
-        final_text = (
-            f"I've used all {self.max_turns} turns working on your request. "
-            f"Made {total_tool_calls} tool calls across {turns_used} turns."
-        )
         self.journal.write("max_turns_reached", {"tool_calls": total_tool_calls, "max_turns": self.max_turns})
+        backup = self._message_after_max_turns(user_input, total_tool_calls, turns_used)
+        summary = await self._synthesize_claude_text_only(user_input, system_prompt)
+        if summary:
+            final_text = (
+                f"{summary}\n\n"
+                f"(Note: this answer was synthesized after reaching the {self.max_turns}-turn tool budget.)"
+            )
+        else:
+            final_text = (
+                f"{backup}\n\n"
+                f"I could not generate a final summary. Try a narrower question, or rephrase and ask again."
+            )
         return AgentResponse(
             text=final_text, decision=gov.decision, risk=gov.risk,
             tool_calls_made=total_tool_calls, turns_used=turns_used,
@@ -1644,11 +1817,19 @@ class HelloAGIAgent:
                 self._history = await self.compressor.compress(self._history)
                 self.journal.write("context_compressed", {"new_length": len(self._history)})
 
-        final_text = (
-            f"I've used all {self.max_turns} turns working on your request. "
-            f"Made {total_tool_calls} tool calls across {turns_used} turns."
-        )
         self.journal.write("max_turns_reached", {"tool_calls": total_tool_calls, "max_turns": self.max_turns})
+        backup = self._message_after_max_turns(user_input, total_tool_calls, turns_used)
+        summary = await self._synthesize_gemini_text_only(user_input, system_prompt, model_id)
+        if summary:
+            final_text = (
+                f"{summary}\n\n"
+                f"(Note: this answer was synthesized after reaching the {self.max_turns}-turn tool budget.)"
+            )
+        else:
+            final_text = (
+                f"{backup}\n\n"
+                f"I could not generate a final summary. Try a narrower question, or rephrase and ask again."
+            )
         return AgentResponse(
             text=final_text, decision=gov.decision, risk=gov.risk,
             tool_calls_made=total_tool_calls, turns_used=turns_used,

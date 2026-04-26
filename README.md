@@ -247,7 +247,11 @@ cd helloagi
 
    By default, Telegram replies hide `allow` governance headers for a more natural chat flow
    (escalate/deny still show). Set `HELLOAGI_TELEGRAM_SHOW_GOV=1` to always show headers.
-   Multi-user memory/history is scoped per principal; set `HELLOAGI_MEMORY_SCOPE=strict` to
+   **Live status** (OpenClaw-style): one placeholder message is edited as tools run, then
+   replaced with the final answer. This is **tool progress + final text**, not token-level
+   streaming like a chat UI. It is **on by default**; set `HELLOAGI_TELEGRAM_LIVE=0` to disable.
+   `HELLOAGI_TELEGRAM_LIVE_MIN_INTERVAL_MS` (default 550) debounces preview edits to reduce
+   rate limits. Multi-user memory/history is scoped per principal; set `HELLOAGI_MEMORY_SCOPE=strict` to
    disable legacy unscoped memory fallback.
 
    Reminder commands:

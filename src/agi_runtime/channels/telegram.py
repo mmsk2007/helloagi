@@ -7,6 +7,7 @@ Supports:
   - /start, /tools, /skills, /identity, /new commands
   - Per-user sessions with history
   - Typing indicator during agent thinking
+  - Live tool progress on one preview message (on by default; HELLOAGI_TELEGRAM_LIVE=0 to disable)
 
 Setup:
   1. pip install python-telegram-bot
@@ -24,7 +25,7 @@ import re
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from agi_runtime.channels.base import BaseChannel, ChannelMessage, ChannelResponse
 from agi_runtime.config.env import load_local_env
@@ -37,6 +38,28 @@ logger = logging.getLogger("helloagi.telegram")
 
 _TG_TEXT_LIMIT = 4096
 _TG_CAPTION_LIMIT = 1024
+_TG_LIVE_PLACEHOLDER = "⏳ Working on your request…"
+_TG_LIVE_MAX_PREVIEW = 3000
+_TG_LIVE_DEFAULT_DEBOUNCE_S = 0.55
+
+
+def _env_telegram_live_enabled() -> bool:
+    """Default ON (OpenClaw-style tool preview). Set HELLOAGI_TELEGRAM_LIVE=0 to disable."""
+    if "HELLOAGI_TELEGRAM_LIVE" not in os.environ:
+        return True
+    v = os.environ.get("HELLOAGI_TELEGRAM_LIVE", "").strip().lower()
+    if v in ("0", "false", "no", "off", "disabled"):
+        return False
+    return v in ("1", "true", "yes", "on", "auto", "")
+
+
+def _env_telegram_live_debounce_s() -> float:
+    raw = os.environ.get("HELLOAGI_TELEGRAM_LIVE_MIN_INTERVAL_MS", "550").strip()
+    try:
+        ms = int(raw, 10)
+    except ValueError:
+        return _TG_LIVE_DEFAULT_DEBOUNCE_S
+    return max(0.2, min(5.0, ms / 1000.0))
 
 
 def _load_telegram_token() -> str:
@@ -162,6 +185,11 @@ class TelegramChannel(BaseChannel):
         await self._app.updater.start_polling()
         await self.start_background_tasks()
         logger.info("Telegram bot started")
+        if _env_telegram_live_enabled():
+            logger.info(
+                "Telegram live tool preview: ON (one placeholder message, edits on tool use). "
+                "Not token streaming — set HELLOAGI_TELEGRAM_LIVE=0 to disable."
+            )
 
     async def stop(self):
         """Stop the Telegram bot."""
@@ -223,6 +251,133 @@ class TelegramChannel(BaseChannel):
                 await self._app.bot.send_message(chat_id=chat_id, text=body)
             except Exception:
                 logger.exception("Plain-text retry to chat %s also failed", chat_id)
+
+    @staticmethod
+    def _format_tool_progress_start(tool_name: str, decision: str) -> str:
+        if decision == "allow":
+            return f"🛠 {tool_name}…"
+        if decision == "deny":
+            return f"🛑 {tool_name} (blocked)"
+        if decision == "escalate":
+            return f"🟡 {tool_name} (needs approval)"
+        return f"⚪ {tool_name} ({decision})"
+
+    @staticmethod
+    def _format_tool_progress_end(tool_name: str, ok: bool) -> str:
+        return f"{'✓' if ok else '✗'} {tool_name}"
+
+    def _schedule_live_preview_fragment(self, live_st: dict, line: str, loop: asyncio.AbstractEventLoop) -> None:
+        """Hop from the think() worker thread to PTB loop; log dropped Future exceptions."""
+        try:
+            fut = asyncio.run_coroutine_threadsafe(self._live_coalesce_edit(live_st, line), loop)
+
+            def _done(f) -> None:
+                exc = f.exception()
+                if exc is not None:
+                    logger.warning("telegram live preview task failed: %s", exc)
+
+            fut.add_done_callback(_done)
+        except Exception as exc:
+            logger.debug("telegram live preview schedule: %s", exc)
+
+    async def _live_coalesce_edit(self, st: dict, fragment: str) -> None:
+        """Debounce: edit preview after quiet period; each new fragment resets the timer."""
+        st.setdefault("lines", []).append(fragment)
+        st["lines"] = st["lines"][-10:]
+        joined = "\n".join(st["lines"])
+        st["pending"] = joined
+        if len(joined) > _TG_LIVE_MAX_PREVIEW:
+            st["pending_for_edit"] = joined[: _TG_LIVE_MAX_PREVIEW - 8] + "\n…(trimmed)"
+        else:
+            st["pending_for_edit"] = joined
+        prev = st.get("debounce_task")
+        if prev is not None and not prev.done():
+            prev.cancel()
+        st["debounce_task"] = asyncio.create_task(self._live_after_quiet(st))
+
+    async def _live_after_quiet(self, st: dict) -> None:
+        try:
+            await asyncio.sleep(st["debounce_s"])
+            await self._live_flush_immediate(st)
+        except asyncio.CancelledError:
+            return
+
+    async def _live_flush_immediate(self, st: dict) -> None:
+        """Push accumulated tool lines to Telegram (plain text). Safe to call after debounce cancel."""
+        text = (st.get("pending_for_edit") or "").strip() or (st.get("pending") or "").strip()
+        if not text or st.get("message_id") is None:
+            return
+        body = text if len(text) <= _TG_TEXT_LIMIT else text[: _TG_TEXT_LIMIT - 8] + "\n…(trimmed)"
+        try:
+            await st["bot"].edit_message_text(
+                chat_id=st["chat_id"],
+                message_id=st["message_id"],
+                text=body,
+            )
+        except Exception as exc:
+            emsg = str(exc).lower()
+            if "message is not modified" in emsg:
+                return
+            logger.debug("Telegram live preview edit failed: %s", exc)
+
+    async def _cancel_live_debounce(self, st: dict) -> None:
+        t = st.get("debounce_task")
+        if t is not None and not t.done():
+            t.cancel()
+            try:
+                await t
+            except asyncio.CancelledError:
+                pass
+        # Debounce cancel drops the scheduled edit; flush so the last tool lines still appear.
+        await self._live_flush_immediate(st)
+
+    async def _reply_user_message_html_or_plain(
+        self, update, response_text: str, *, char_cap: int = 4000
+    ) -> None:
+        if len(response_text) > char_cap:
+            response_text = response_text[:char_cap] + "\n\n...truncated"
+        try:
+            await update.message.reply_text(
+                _markdownish_to_html(response_text),
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.debug("HTML reply failed (%s); retrying as plain text", exc)
+            await update.message.reply_text(response_text)
+
+    async def _deliver_telegram_response(
+        self,
+        update,
+        context,
+        response_text: str,
+        live_st: Optional[dict],
+    ) -> None:
+        """Send the final model reply, preferring in-place edit of the live placeholder."""
+        if not live_st or live_st.get("message_id") is None:
+            await self._reply_user_message_html_or_plain(update, response_text)
+            return
+        if len(response_text) > 4000:
+            response_text = response_text[:4000] + "\n\n...truncated"
+        html_body = _markdownish_to_html(response_text)
+        try:
+            await context.bot.edit_message_text(
+                chat_id=live_st["chat_id"],
+                message_id=live_st["message_id"],
+                text=html_body,
+                parse_mode="HTML",
+            )
+        except Exception as exc:
+            logger.debug("Telegram final edit failed (%s); replying in new message", exc)
+            try:
+                await self._reply_user_message_html_or_plain(update, response_text)
+            finally:
+                try:
+                    await context.bot.delete_message(
+                        chat_id=live_st["chat_id"],
+                        message_id=live_st["message_id"],
+                    )
+                except Exception:
+                    pass
 
     # ── Outbound media (file/image/voice) ─────────────────────
 
@@ -559,6 +714,42 @@ class TelegramChannel(BaseChannel):
         self.agent.on_user_input = on_user_input
 
         import time as _time
+
+        live_st: Optional[dict] = None
+        if _env_telegram_live_enabled() and self._loop and self._app:
+            try:
+                pm = await context.bot.send_message(
+                    chat_id=int(chat_id),
+                    text=f"{_TG_LIVE_PLACEHOLDER}\n\n{preview}",
+                    reply_to_message_id=update.message.message_id,
+                )
+                live_st = {
+                    "chat_id": int(chat_id),
+                    "message_id": pm.message_id,
+                    "bot": context.bot,
+                    "debounce_s": _env_telegram_live_debounce_s(),
+                    "lines": [],
+                    "debounce_task": None,
+                }
+            except Exception as ex:
+                logger.debug("Telegram live preview placeholder send failed: %s", ex)
+
+        original_on_tool_start = self.agent.on_tool_start
+        original_on_tool_end = self.agent.on_tool_end
+        if live_st and self._loop is not None:
+            ploop = self._loop
+
+            def on_tool_start(name, input_data, decision):
+                line = self._format_tool_progress_start(name, decision)
+                self._schedule_live_preview_fragment(live_st, line, ploop)
+
+            def on_tool_end(name, ok, output):
+                line = self._format_tool_progress_end(name, ok)
+                self._schedule_live_preview_fragment(live_st, line, ploop)
+
+            self.agent.on_tool_start = on_tool_start
+            self.agent.on_tool_end = on_tool_end
+
         t0 = _time.monotonic()
         self._inflight_by_principal[principal_id] = {"started_at": t0, "preview": preview}
         try:
@@ -588,30 +779,47 @@ class TelegramChannel(BaseChannel):
 
             response_text = r.text if not meta_line else f"{meta_line}\n\n{r.text}"
 
+            if live_st and live_st.get("message_id") is not None:
+                await self._cancel_live_debounce(live_st)
+
             # Telegram 4096 char limit
             if len(response_text) > 4000:
                 response_text = response_text[:4000] + "\n\n...truncated"
 
-            # Render the narrow markdown subset Claude emits (**bold**, `code`,
-            # ```block```) as Telegram HTML so users see formatting instead of
-            # literal asterisks. Underscores stay literal — tool/file names like
-            # web_fetch and file_path would otherwise become italics.
-            try:
-                await update.message.reply_text(
-                    _markdownish_to_html(response_text),
-                    parse_mode="HTML",
-                )
-            except Exception as exc:
-                logger.debug("HTML reply failed (%s); retrying as plain text", exc)
-                await update.message.reply_text(response_text)
+            await self._deliver_telegram_response(update, context, response_text, live_st)
 
         except asyncio.TimeoutError:
             logger.warning("Telegram handler: think() exceeded 600s")
-            await update.message.reply_text(
-                "⏱ That took too long (10 minute limit). Try a shorter question or check server logs."
-            )
+            if live_st and live_st.get("message_id") is not None:
+                try:
+                    await self._cancel_live_debounce(live_st)
+                except Exception:
+                    pass
+            err = "⏱ That took too long (10 minute limit). Try a shorter question or check server logs."
+            if live_st and live_st.get("message_id") is not None:
+                try:
+                    await context.bot.delete_message(
+                        chat_id=live_st["chat_id"],
+                        message_id=live_st["message_id"],
+                    )
+                except Exception:
+                    pass
+            await update.message.reply_text(err)
         except Exception as e:
             logger.error(f"Error handling message: {e}")
+            if live_st and live_st.get("message_id") is not None:
+                try:
+                    await self._cancel_live_debounce(live_st)
+                except Exception:
+                    pass
+            if live_st and live_st.get("message_id") is not None:
+                try:
+                    await context.bot.delete_message(
+                        chat_id=live_st["chat_id"],
+                        message_id=live_st["message_id"],
+                    )
+                except Exception:
+                    pass
             await update.message.reply_text(f"❌ Error: {str(e)[:200]}")
 
         finally:
@@ -622,6 +830,16 @@ class TelegramChannel(BaseChannel):
                 pass
             self._inflight_by_principal.pop(principal_id, None)
             self.agent.on_user_input = original_input
+            self.agent.on_tool_start = original_on_tool_start
+            self.agent.on_tool_end = original_on_tool_end
+            if live_st and live_st.get("debounce_task") is not None:
+                tsk = live_st.get("debounce_task")
+                if tsk and not tsk.done():
+                    tsk.cancel()
+                    try:
+                        await tsk
+                    except asyncio.CancelledError:
+                        pass
 
     async def _typing_keepalive(self, bot, chat_id: int):
         """Keep Telegram's typing indicator visible during long-running tasks."""
