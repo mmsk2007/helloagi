@@ -2,6 +2,23 @@
 
 Thanks for your interest in contributing to HelloAGI. This guide covers everything you need to get started.
 
+## Never commit local secrets or machine state
+
+These paths are **gitignored** on purpose. Do **not** `git add -f` them into the public repo:
+
+- `.env`, `.env.*` — API keys, bot tokens, service auth
+- `helloagi.json` — runtime config (may reference local paths)
+- `helloagi.onboard.json` — onboarding metadata (names, timezone, detected environment)
+- `memory/` — identity, journal, DB, auth profiles, imports
+
+If you need a config sample for a bug report, use **`helloagi.example.json`** and redact any secrets.
+
+**Pre-push:** run `git status` and skim `git diff --staged` for accidental `.env` or token strings. CI may run secret scanning (see `.github/workflows/gitleaks.yml`).
+
+## Config drift and migrations
+
+HelloAGI does **not** yet ship an OpenClaw-style `doctor --fix` that auto-rewrites config. If keys or schema change between releases, prefer **re-running `helloagi onboard`** (interactive or `--non-interactive`) or editing `helloagi.json` / `.env` manually. A dedicated migrate/fix command is deferred until schema churn justifies it.
+
 ## Development Setup
 
 ```bash

@@ -6,6 +6,15 @@
 - **pip** (comes with Python)
 - **Anthropic API key** (optional — needed for Claude backbone, not required for local-only mode)
 
+## Quick path (recommended order)
+
+1. Create and activate a **venv** (see Option 0 below), especially on Windows or conda `base`.
+2. **Install** HelloAGI: `pip install -e ".[rich,telegram]"` from a clone, or `pip install "helloagi[rich,telegram]"` from PyPI.
+3. **Onboard:** `helloagi onboard` or `python -m agi_runtime.cli onboard` (same interpreter as step 2).
+4. **Verify:** `helloagi health` and `helloagi onboard-status`.
+
+There is no separate OpenClaw-style `doctor --fix` auto-migration yet; if config drifts, re-run `helloagi onboard` or edit `helloagi.json` / `.env` manually.
+
 ---
 
 ## Option 0: Virtual environment (recommended on Windows / conda)
@@ -187,6 +196,17 @@ helloagi onboard --non-interactive \
   --agent-name Lana \
   --owner-name You
 ```
+
+**CLI flags vs OpenAI:** `--provider` accepts only `template`, `anthropic`, or `google`. There is no `--provider openai`. Configure OpenAI with `OPENAI_API_KEY` or `OPENAI_AUTH_TOKEN` in `.env`, or use the interactive wizard’s optional OpenAI credential step.
+
+**PATH tip:** If `helloagi` is not on your PATH yet, use the same interpreter you installed into:
+
+```bash
+python -m agi_runtime.cli onboard --help
+python -m agi_runtime.cli onboard --non-interactive --provider google --auth-mode api_key --runtime-mode cli
+```
+
+(Requires `GOOGLE_API_KEY` in the environment for that example.)
 
 ### 2. Initialize runtime config
 

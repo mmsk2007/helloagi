@@ -219,6 +219,8 @@ cd helloagi
 
    The wizard can import an existing OpenClaw/Hermes setup, choose the active provider (`template`, `anthropic`, or `google`), accept `api_key` or `auth_token` auth modes, create the active auth profile, generate `HELLOAGI_API_KEY` for the local service, and enable Telegram, Discord, or local voice in the same flow.
 
+   **Non-interactive `--provider`:** only `template`, `anthropic`, or `google` are valid. **OpenAI** is not a primary `--provider` value. For OpenAI, set `OPENAI_API_KEY` or `OPENAI_AUTH_TOKEN` in `.env` (or use the interactive wizard’s optional OpenAI step).
+
    For scripted installs, the same setup can run without prompts:
 
    ```bash
