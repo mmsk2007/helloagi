@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field, asdict, fields
 from pathlib import Path
-from typing import Tuple
+from typing import Any, Dict, Tuple
 import json
 
 
@@ -11,6 +13,48 @@ _DEFAULT_OUTBOUND_EXTS: Tuple[str, ...] = (
     "mp4", "mov", "webm",
     "zip", "tar", "gz",
 )
+
+
+def _default_reliability() -> Dict[str, Any]:
+    return {
+        "enabled": True,
+        "loop_threshold": 3,
+        "verify_completions": True,
+        # 0 = disabled. When set, main think() loop stops with a user-visible message
+        # after this many wall-clock seconds (Hermes/OpenClaw-style bounded runs).
+        "soft_timeout_sec": 0,
+    }
+
+
+def _default_skill_bank() -> Dict[str, Any]:
+    return {
+        "enabled": True,
+        "auto_extract": True,
+        "decay_days": 30,
+    }
+
+
+def _default_context() -> Dict[str, Any]:
+    return {
+        "managed": True,
+        "max_budget_tokens": 120000,
+    }
+
+
+def _default_browser() -> Dict[str, Any]:
+    return {
+        "enabled": True,
+        "headless": True,
+        "max_nav_per_min": 10,
+    }
+
+
+def _merge_section(default: Dict[str, Any], raw_val: Any) -> Dict[str, Any]:
+    """Shallow-merge a feature section dict from JSON onto defaults."""
+    out = dict(default)
+    if isinstance(raw_val, dict):
+        out.update(raw_val)
+    return out
 
 
 @dataclass
@@ -36,6 +80,11 @@ class RuntimeSettings:
     allowed_outbound_extensions: Tuple[str, ...] = field(
         default_factory=lambda: _DEFAULT_OUTBOUND_EXTS
     )
+    # Feature sections (merged from helloagi.json — never silently dropped)
+    reliability: Dict[str, Any] = field(default_factory=_default_reliability)
+    skill_bank: Dict[str, Any] = field(default_factory=_default_skill_bank)
+    context: Dict[str, Any] = field(default_factory=_default_context)
+    browser: Dict[str, Any] = field(default_factory=_default_browser)
 
 
 def load_settings(path: str = "helloagi.json") -> RuntimeSettings:
@@ -51,6 +100,19 @@ def load_settings(path: str = "helloagi.json") -> RuntimeSettings:
     merged = {**defaults, **raw}
     allowed = {f.name for f in fields(RuntimeSettings)}
     filtered = {k: v for k, v in merged.items() if k in allowed}
+    # Deep-merge dict feature sections so partial JSON does not wipe defaults
+    filtered["reliability"] = _merge_section(
+        dict(_default_reliability()), merged.get("reliability")
+    )
+    filtered["skill_bank"] = _merge_section(
+        dict(_default_skill_bank()), merged.get("skill_bank")
+    )
+    filtered["context"] = _merge_section(
+        dict(_default_context()), merged.get("context")
+    )
+    filtered["browser"] = _merge_section(
+        dict(_default_browser()), merged.get("browser")
+    )
     return RuntimeSettings(**filtered)
 
 

@@ -85,6 +85,9 @@ Docs by goal:
 - Environment variables: [docs/environment.md](docs/environment.md)
 - Platforms: [docs/platforms.md](docs/platforms.md)
 - Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
+- Upgrade (feature flags, browser extra): [docs/UPGRADE_GUIDE.md](docs/UPGRADE_GUIDE.md)
+- Vision: [docs/HELLOAGI_VISION.md](docs/HELLOAGI_VISION.md)
+- Implementation plan: [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
 
 ### What Happens During Install + First Run
 

@@ -1,0 +1,35 @@
+{
+  "name": "HelloAGI",
+  "identity_name": "Lana",
+  "mission": "Help humans build safe, useful, high-impact systems",
+  "style": "direct, warm, strategic",
+  "domain_focus": "agents, products, automation",
+  "memory_path": "memory/identity_state.json",
+  "journal_path": "memory/events.jsonl",
+  "db_path": "memory/helloagi.db",
+  "llm_provider": "auto",
+  "default_policy_pack": "safe-default",
+  "default_model_tier": "balanced",
+  "runtime_mode": "hybrid",
+  "preferred_timezone": "",
+  "reliability": {
+    "enabled": true,
+    "loop_threshold": 3,
+    "verify_completions": true,
+    "soft_timeout_sec": 0
+  },
+  "skill_bank": {
+    "enabled": true,
+    "auto_extract": true,
+    "decay_days": 30
+  },
+  "context": {
+    "managed": true,
+    "max_budget_tokens": 120000
+  },
+  "browser": {
+    "enabled": true,
+    "headless": true,
+    "max_nav_per_min": 10
+  }
+}

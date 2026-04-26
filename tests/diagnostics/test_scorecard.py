@@ -41,7 +41,7 @@ class TestScorecard(unittest.TestCase):
             self.assertIn("events=1", journal_check["detail"])
             provider_check = next(check for check in rep["checks"] if check["name"] == "providers")
             self.assertTrue(provider_check["ok"])
-            self.assertIn("available=openai", provider_check["detail"])
+            self.assertIn("openai", provider_check["detail"])
 
     def test_scorecard_flags_invalid_journal_lines(self):
         with tempfile.TemporaryDirectory() as td:

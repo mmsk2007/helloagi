@@ -33,16 +33,21 @@ class ReminderTicker:
             os.environ.get("HELLOAGI_REMINDER_ONESHOT_GRACE_SECONDS", "300")
         )
         self._task: asyncio.Task | None = None
-        self._stop = asyncio.Event()
+        # Created lazily in start() so constructing ReminderTicker without a
+        # running loop (e.g. sync tests) does not call deprecated get_event_loop().
+        self._stop: asyncio.Event | None = None
 
     async def start(self) -> None:
+        if self._stop is None:
+            self._stop = asyncio.Event()
         if self._task and not self._task.done():
             return
         self._stop.clear()
         self._task = asyncio.create_task(self._loop())
 
     async def stop(self) -> None:
-        self._stop.set()
+        if self._stop is not None:
+            self._stop.set()
         if self._task:
             self._task.cancel()
             try:
@@ -82,6 +87,7 @@ class ReminderTicker:
         return count
 
     async def _loop(self) -> None:
+        assert self._stop is not None
         while not self._stop.is_set():
             try:
                 await self.run_once()

@@ -37,6 +37,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, List, Optional, Protocol
 
+from agi_runtime.skills.skill_extractor import SkillExtractor
+
 from agi_runtime.governance.output_guard import OutputGuard, OutputGuardResult
 from agi_runtime.governance.posture import (
     BALANCED,
@@ -142,6 +144,10 @@ class TriLoop:
         posture_engine: Optional[PostureEngine] = None,
         journal: Optional[Journal] = None,
         now_fn: Callable[[], float] = time.time,
+        skill_bank: Optional[Any] = None,
+        skill_extractor: Optional[SkillExtractor] = None,
+        skill_governance_adapter: Optional[Any] = None,
+        skill_auto_extract: bool = True,
     ):
         self.agent = agent
         # Reuse the agent's own governor when available so policy packs
@@ -153,6 +159,10 @@ class TriLoop:
         self.posture_engine = posture_engine or PostureEngine(governor=self.governor)
         self.journal = journal or getattr(agent, "journal", None)
         self._now = now_fn
+        self.skill_bank = skill_bank
+        self.skill_extractor = skill_extractor or SkillExtractor()
+        self.skill_governance_adapter = skill_governance_adapter
+        self.skill_auto_extract = skill_auto_extract
 
     # ------------------------------------------------------------------ run
     def run(
@@ -258,7 +268,7 @@ class TriLoop:
             iterations.append(trace)
 
             if verdict.passed:
-                return TriLoopResult(
+                result = TriLoopResult(
                     status="passed",
                     goal=goal,
                     posture=posture,
@@ -269,6 +279,8 @@ class TriLoop:
                     successful_plan=plan,
                     total_duration_sec=self._now() - started,
                 )
+                self._maybe_extract_skill(goal, plan, iterations)
+                return result
 
             # Prepare for replan
             last_plan = plan
@@ -411,6 +423,43 @@ class TriLoop:
             "tool_calls_made": tool_calls,
         })
         return trace, True
+
+    def _maybe_extract_skill(
+        self,
+        goal: str,
+        plan: Plan,
+        iterations: List[IterationTrace],
+    ) -> None:
+        if not self.skill_auto_extract or self.skill_bank is None:
+            return
+        verify_summary = ""
+        if iterations and iterations[-1].verify:
+            verify_summary = iterations[-1].verify.summary or ""
+        contract = self.skill_extractor.extract_from_trace(
+            goal,
+            plan.steps,
+            plan.reasoning,
+            task_id=f"triloop-{int(self._now())}",
+            verify_summary=verify_summary,
+        )
+        if not contract:
+            return
+        if self.skill_governance_adapter is not None:
+            gate = self.skill_governance_adapter.check_skill_promotion(contract)
+            if not gate.allowed:
+                self._journal("triloop.skill.extract_denied", {
+                    "name": contract.name,
+                    "reasons": gate.reasons,
+                })
+                return
+        try:
+            self.skill_bank.add(contract)
+            self._journal("triloop.skill.extracted", {
+                "skill_id": contract.skill_id,
+                "name": contract.name,
+            })
+        except Exception as exc:  # pragma: no cover — persistence must not break loop
+            self._journal("triloop.skill.extract_error", {"error": str(exc)})
 
     # --------------------------------------------------------- journal
     def _journal(self, kind: str, payload: dict) -> None:

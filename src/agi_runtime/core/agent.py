@@ -23,7 +23,9 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from agi_runtime.governance.memory_guard import MemoryGuard
+from agi_runtime.governance.output_guard import OutputGuard
 from agi_runtime.governance.srg import SRGGovernor, GovernanceResult
+from agi_runtime.governance.srg_adapter import SRGAdapter
 from agi_runtime.latency.ale import ALEngine
 from agi_runtime.memory.identity import IdentityEngine
 from agi_runtime.memory.principals import PrincipalProfileStore
@@ -44,6 +46,9 @@ from agi_runtime.skills.manager import SkillManager
 from agi_runtime.memory.compressor import ContextCompressor
 from agi_runtime.robustness.circuit_breaker import CircuitBreaker
 from agi_runtime.supervisor.supervisor import Supervisor
+from agi_runtime.reliability import CompletionVerifier, LoopBreaker, RecoveryManager, StopValidator
+from agi_runtime.context.context_manager import ContextManager
+from agi_runtime.context.context_segment import ContextSegment
 from agi_runtime.core.personality import GrowthTracker, build_personality_prompt, get_time_greeting
 from agi_runtime.core.time_context import build_time_context_block
 from agi_runtime.intelligence.sentiment import SentimentTracker
@@ -91,6 +96,7 @@ class HelloAGIAgent:
         self.policy_pack = get_pack(policy_pack)
         self.governor = SRGGovernor(policy_pack=policy_pack, settings=self.settings)
         self.memory_guard = MemoryGuard()
+        self.output_guard = OutputGuard()
         self.ale = ALEngine()
         self.identity = IdentityEngine(
             path=self.settings.memory_path,
@@ -100,10 +106,27 @@ class HelloAGIAgent:
         )
         self.principals = PrincipalProfileStore()
         self.journal = Journal(self.settings.journal_path)
-        self.skills = SkillManager()
+        self.srg_adapter = SRGAdapter(
+            governor=self.governor,
+            output_guard=self.output_guard,
+            memory_guard=self.memory_guard,
+            journal=self.journal,
+        )
+        self.skills = SkillManager(skill_bank_settings=self.settings.skill_bank)
+        self.context_manager = ContextManager(self.settings.context)
         self.compressor = ContextCompressor()
         self.circuit_breaker = CircuitBreaker(failure_threshold=5, cooldown_seconds=60.0)
         self.supervisor = Supervisor(pause_consecutive=5, pause_rate=0.5)
+
+        # Reliability Layer (Milestone 3)
+        reliability_cfg = self.settings.reliability if isinstance(self.settings.reliability, dict) else {}
+        self.reliability_enabled = bool(reliability_cfg.get("enabled", True))
+        loop_thresh = int(reliability_cfg.get("loop_threshold", 3))
+        self.completion_verifier = CompletionVerifier()
+        self.loop_breaker = LoopBreaker(repetition_threshold=loop_thresh)
+        self.recovery_manager = RecoveryManager()
+        self.stop_validator = StopValidator()
+
         self.growth = GrowthTracker()
         self.sentiment = SentimentTracker()
         self.context_compiler = ContextCompiler()
@@ -144,6 +167,8 @@ class HelloAGIAgent:
         # gracefully degrade to "share path with user" text.
         self._active_channel: Any = None
         self._active_channel_id: Optional[str] = None
+        # Set for the duration of _think_async when reliability.soft_timeout_sec > 0
+        self._think_soft_deadline: Optional[float] = None
 
     def set_principal(self, principal_id: str) -> None:
         """Set active conversation principal for this execution context."""
@@ -519,12 +544,47 @@ class HelloAGIAgent:
             parts.append(skills_index)
             parts.append("</skills>")
 
-        # Inject memory context
+        sb_cfg = self.settings.skill_bank if isinstance(self.settings.skill_bank, dict) else {}
+        if sb_cfg.get("enabled", True):
+            recent = self._recent_user_messages(1)
+            if recent:
+                hints = self.skills.find_matching_skill_semantic(recent[-1], top_k=3)
+                if hints:
+                    lines = ["Semantic skill hints (use skill_invoke when appropriate):"]
+                    for h in hints:
+                        lines.append(
+                            f"  - {h.skill.name} (relevance {h.relevance:.2f}): "
+                            f"{h.skill.description[:160]}"
+                        )
+                    parts.append("")
+                    parts.append("<skill-hints>")
+                    parts.append("\n".join(lines))
+                    parts.append("</skill-hints>")
+
+        # Inject memory context (optionally rolled / budgeted)
         memory_context = self._get_memory_context()
         if memory_context:
             parts.append("")
             parts.append("<memory-context>")
-            parts.append(memory_context)
+            if self._context_managed():
+                qh = " ".join(self._recent_user_messages(3)) or "memory"
+                ctx_cfg = self.settings.context if isinstance(self.settings.context, dict) else {}
+                mem_budget = min(6000, max(500, int(ctx_cfg.get("max_budget_tokens", 120000)) // 24))
+                rolled = self.context_manager.build_supplement(
+                    query_hint=qh,
+                    segments=[
+                        ContextSegment(
+                            "memory",
+                            9,
+                            memory_context,
+                            max_tokens=mem_budget,
+                            relevance_score=0.75,
+                        ),
+                    ],
+                )
+                parts.append(rolled or memory_context)
+            else:
+                parts.append(memory_context)
             parts.append("</memory-context>")
 
         if profile_excerpt:
@@ -559,7 +619,23 @@ class HelloAGIAgent:
             return False
         if self.policy_pack.blocked_tools and tool_name in self.policy_pack.blocked_tools:
             return False
+        if tool_name.startswith("browser_") and not self._browser_tools_allowed():
+            return False
         return True
+
+    def _browser_tools_allowed(self) -> bool:
+        cfg = self.settings.browser if isinstance(self.settings.browser, dict) else {}
+        if not cfg.get("enabled", True):
+            return False
+        try:
+            import playwright  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def _context_managed(self) -> bool:
+        cfg = self.settings.context if isinstance(self.settings.context, dict) else {}
+        return bool(cfg.get("managed", True))
 
     def _list_allowed_tools(self):
         return [t for t in self.tool_registry.list_tools() if self._allowed_tool(t.name)]
@@ -873,19 +949,62 @@ class HelloAGIAgent:
             profile_excerpt=profile_excerpt,
         )
 
-        if self._llm_provider == "anthropic":
-            return await self._think_async_claude(user_input, gov, tools, system_prompt)
-        return await self._think_async_gemini(user_input, gov, tools, system_prompt)
+        rel_cfg = self.settings.reliability if isinstance(self.settings.reliability, dict) else {}
+        to_sec = int(rel_cfg.get("soft_timeout_sec", 0) or 0)
+        self._think_soft_deadline = (time.time() + float(to_sec)) if to_sec > 0 else None
+        try:
+            if self._llm_provider == "anthropic":
+                return await self._think_async_claude(user_input, gov, tools, system_prompt, principal_id)
+            return await self._think_async_gemini(user_input, gov, tools, system_prompt, principal_id)
+        finally:
+            self._think_soft_deadline = None
 
     async def _think_async_claude(
-        self, user_input: str, gov: GovernanceResult, tools: List[dict], system_prompt: str
+        self, user_input: str, gov: GovernanceResult, tools: List[dict], system_prompt: str, principal_id: str
     ) -> AgentResponse:
         """Anthropic Messages API tool loop."""
         total_tool_calls = 0
         turns_used = 0
 
+        if self.reliability_enabled:
+            self.loop_breaker.reset(principal_id)
+            self.recovery_manager.reset(principal_id)
+
         for turn in range(self.max_turns):
             turns_used = turn + 1
+
+            if self._think_soft_deadline is not None and time.time() >= self._think_soft_deadline:
+                msg = (
+                    "Stopped: reached the configured think-time limit "
+                    "(set `reliability.soft_timeout_sec` in helloagi.json; use 0 to disable)."
+                )
+                self.journal.write(
+                    "think_soft_timeout",
+                    {"turns": turns_used, "tool_calls": total_tool_calls},
+                )
+                return AgentResponse(
+                    text=msg,
+                    decision=gov.decision,
+                    risk=gov.risk,
+                    tool_calls_made=total_tool_calls,
+                    turns_used=turns_used,
+                )
+
+            if self.reliability_enabled:
+                signal = self.loop_breaker.check(principal_id)
+                if signal.detected:
+                    action = self.recovery_manager.suggest(
+                        loop_type=signal.loop_type, session_id=principal_id
+                    )
+                    if action.exhausted:
+                        self.journal.write("recovery_exhausted", {})
+                        return AgentResponse(
+                            text=action.instruction, decision=gov.decision, risk=gov.risk,
+                            tool_calls_made=total_tool_calls, turns_used=turns_used
+                        )
+                    else:
+                        self._history.append({"role": "user", "content": action.instruction})
+                        self.journal.write("loop_broken", {"strategy": action.strategy})
 
             try:
                 response = self._claude.messages.create(
@@ -922,6 +1041,47 @@ class HelloAGIAgent:
 
             if not tool_calls:
                 final_text = "\n".join(text_parts)
+
+                if self.reliability_enabled:
+                    tools_used_names = [tc["tool"] for tc in self._session_tool_calls]
+                    comp_check = self.completion_verifier.verify(
+                        final_text, tool_calls_made=total_tool_calls, tools_used=tools_used_names
+                    )
+                    if comp_check.status == "phantom":
+                        self.journal.write("phantom_completion", {"reasons": comp_check.reasons})
+                        try:
+                            self.srg_adapter.logger.log_generic(
+                                gate="completion",
+                                decision="require_more_evidence",
+                                reasons=list(comp_check.reasons),
+                                principal_id=principal_id,
+                                action_summary="phantom_completion",
+                            )
+                        except Exception:
+                            pass
+                        self._history.append({"role": "user", "content": comp_check.suggestion})
+                        continue
+
+                    stop_check = self.stop_validator.validate(
+                        final_text, tool_calls_made=total_tool_calls,
+                        tools_used=tools_used_names, is_multi_step=(total_tool_calls > 1)
+                    )
+                    if stop_check.decision == "continue":
+                        self.journal.write("stop_validation_failed", {"reasons": stop_check.reasons})
+                        try:
+                            self.srg_adapter.logger.log_generic(
+                                gate="completion",
+                                decision="require_more_evidence",
+                                reasons=list(stop_check.reasons),
+                                principal_id=principal_id,
+                                action_summary="stop_validation_continue",
+                            )
+                        except Exception:
+                            pass
+                        self._history.append({"role": "user", "content": stop_check.disclaimer})
+                        continue
+                    elif stop_check.decision == "disclaim" and stop_check.disclaimer:
+                        final_text += stop_check.disclaimer
 
                 if gov.decision == "escalate":
                     final_text += "\n\n⚠️ This request was flagged for human confirmation before high-risk actions."
@@ -1070,6 +1230,15 @@ class HelloAGIAgent:
                     "ok": result.ok,
                 })
 
+                if self.reliability_enabled:
+                    self.loop_breaker.record_call(
+                        tool=tc.name,
+                        args=tc.input,
+                        error=result.to_content()[:200] if not result.ok else "",
+                        response="",
+                        session_id=principal_id
+                    )
+
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tc.id,
@@ -1162,7 +1331,7 @@ class HelloAGIAgent:
         raise RuntimeError("Gemini generate_content failed")
 
     async def _think_async_gemini(
-        self, user_input: str, gov: GovernanceResult, tools: List[dict], system_prompt: str
+        self, user_input: str, gov: GovernanceResult, tools: List[dict], system_prompt: str, principal_id: str
     ) -> AgentResponse:
         """Google Gemini generate_content tool loop (manual function calling)."""
         from google.genai import types as gtypes
@@ -1198,8 +1367,46 @@ class HelloAGIAgent:
         total_tool_calls = 0
         turns_used = 0
 
+        if self.reliability_enabled:
+            self.loop_breaker.reset(principal_id)
+            self.recovery_manager.reset(principal_id)
+
         for turn in range(self.max_turns):
             turns_used = turn + 1
+
+            if self._think_soft_deadline is not None and time.time() >= self._think_soft_deadline:
+                msg = (
+                    "Stopped: reached the configured think-time limit "
+                    "(set `reliability.soft_timeout_sec` in helloagi.json; use 0 to disable)."
+                )
+                self.journal.write(
+                    "think_soft_timeout",
+                    {"turns": turns_used, "tool_calls": total_tool_calls, "provider": "google"},
+                )
+                return AgentResponse(
+                    text=msg,
+                    decision=gov.decision,
+                    risk=gov.risk,
+                    tool_calls_made=total_tool_calls,
+                    turns_used=turns_used,
+                )
+
+            if self.reliability_enabled:
+                signal = self.loop_breaker.check(principal_id)
+                if signal.detected:
+                    action = self.recovery_manager.suggest(
+                        loop_type=signal.loop_type, session_id=principal_id
+                    )
+                    if action.exhausted:
+                        self.journal.write("recovery_exhausted", {})
+                        return AgentResponse(
+                            text=action.instruction, decision=gov.decision, risk=gov.risk,
+                            tool_calls_made=total_tool_calls, turns_used=turns_used
+                        )
+                    else:
+                        self._history.append({"role": "user", "content": action.instruction})
+                        self.journal.write("loop_broken", {"strategy": action.strategy})
+                        
             try:
                 response, model_id = await self._gemini_generate_with_resilience(
                     model_id=model_id,
@@ -1247,6 +1454,48 @@ class HelloAGIAgent:
 
             if not tool_calls:
                 final_text = plain_text or ""
+
+                if self.reliability_enabled:
+                    tools_used_names = [tc["tool"] for tc in self._session_tool_calls]
+                    comp_check = self.completion_verifier.verify(
+                        final_text, tool_calls_made=total_tool_calls, tools_used=tools_used_names
+                    )
+                    if comp_check.status == "phantom":
+                        self.journal.write("phantom_completion", {"reasons": comp_check.reasons})
+                        try:
+                            self.srg_adapter.logger.log_generic(
+                                gate="completion",
+                                decision="require_more_evidence",
+                                reasons=list(comp_check.reasons),
+                                principal_id=principal_id,
+                                action_summary="phantom_completion",
+                            )
+                        except Exception:
+                            pass
+                        self._history.append({"role": "user", "content": comp_check.suggestion})
+                        continue
+
+                    stop_check = self.stop_validator.validate(
+                        final_text, tool_calls_made=total_tool_calls,
+                        tools_used=tools_used_names, is_multi_step=(total_tool_calls > 1)
+                    )
+                    if stop_check.decision == "continue":
+                        self.journal.write("stop_validation_failed", {"reasons": stop_check.reasons})
+                        try:
+                            self.srg_adapter.logger.log_generic(
+                                gate="completion",
+                                decision="require_more_evidence",
+                                reasons=list(stop_check.reasons),
+                                principal_id=principal_id,
+                                action_summary="stop_validation_continue",
+                            )
+                        except Exception:
+                            pass
+                        self._history.append({"role": "user", "content": stop_check.disclaimer})
+                        continue
+                    elif stop_check.decision == "disclaim" and stop_check.disclaimer:
+                        final_text += stop_check.disclaimer
+
                 if gov.decision == "escalate":
                     final_text += "\n\n⚠️ This request was flagged for human confirmation before high-risk actions."
                 self.ale.put(user_input, final_text)
@@ -1371,6 +1620,15 @@ class HelloAGIAgent:
                 })
                 self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": result.ok})
                 out = result.to_content()
+
+                if self.reliability_enabled:
+                    self.loop_breaker.record_call(
+                        tool=tc.name,
+                        args=tc.input,
+                        error=out[:200] if not result.ok else "",
+                        response="",
+                        session_id=principal_id
+                    )
                 tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": out})
                 func_response_parts.append(gtypes.Part.from_function_response(name=tc.name, response={"result": out}))
                 if self.on_tool_end:
@@ -1395,6 +1653,22 @@ class HelloAGIAgent:
 
     # ── Helpers ────────────────────────────────────────────────
 
+    def create_tri_loop(self):
+        """SRG-governed TriLoop sharing this agent's policy, journal, and skill bank."""
+        from agi_runtime.autonomy.tri_loop import TriLoop
+
+        sb = self.settings.skill_bank if isinstance(self.settings.skill_bank, dict) else {}
+        auto = bool(sb.get("auto_extract", True)) and bool(sb.get("enabled", True))
+        return TriLoop(
+            self,
+            governor=self.governor,
+            output_guard=self.output_guard,
+            journal=self.journal,
+            skill_bank=self.skills.skill_bank,
+            skill_governance_adapter=self.srg_adapter,
+            skill_auto_extract=auto,
+        )
+
     async def _execute_tool(self, tool_name: str, tool_input: dict) -> ToolResult:
         """Execute a tool with principal- and channel-aware context.
 
@@ -1408,6 +1682,10 @@ class HelloAGIAgent:
             memory_principal_id=self.current_profile_principal(),
             channel=self._active_channel,
             channel_id=self._active_channel_id,
+            browser_enabled=self._browser_tools_allowed(),
+            browser_settings=dict(self.settings.browser)
+            if isinstance(self.settings.browser, dict)
+            else {},
         )
         try:
             return await self.tool_registry.execute(tool_name, tool_input)

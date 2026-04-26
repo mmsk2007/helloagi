@@ -47,6 +47,7 @@ voice = [
     "pyttsx3>=2.90; platform_system != 'Windows'",
 ]
 embeddings = ["google-genai>=1.0"]
+browser = ["playwright>=1.40"]
 claude-sdk = ["claude-agent-sdk>=0.1"]
 all = [
     "rich>=13.0",
@@ -57,6 +58,7 @@ all = [
     "SpeechRecognition>=3.10; platform_system != 'Windows'",
     "pyttsx3>=2.90; platform_system != 'Windows'",
     "claude-agent-sdk>=0.1",
+    "playwright>=1.40",
 ]
 dev = ["pytest>=7.0", "pytest-asyncio>=0.21"]
 
