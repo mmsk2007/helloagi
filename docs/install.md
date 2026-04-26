@@ -11,7 +11,8 @@
 1. Create and activate a **venv** (see Option 0 below), especially on Windows or conda `base`.
 2. **Install** HelloAGI: `pip install -e ".[rich,telegram]"` from a clone, or `pip install "helloagi[rich,telegram]"` from PyPI.
 3. **Onboard:** `helloagi onboard` or `python -m agi_runtime.cli onboard` (same interpreter as step 2).
-4. **Verify:** `helloagi health` and `helloagi onboard-status`.
+4. **Stay online (Telegram/Discord):** from the project directory, `helloagi service install --telegram` then `helloagi service start` (see [Telegram or Discord after onboarding](#telegram-or-discord-after-onboarding)). For a quick foreground trial only, use `helloagi serve --telegram`.
+5. **Verify:** `helloagi health`, `helloagi service status`, and `helloagi onboard-status`.
 
 There is no separate OpenClaw-style `doctor --fix` auto-migration yet; if config drifts, re-run `helloagi onboard` or edit `helloagi.json` / `.env` manually.
 
@@ -142,24 +143,36 @@ The container runs the HTTP API server on port 8787 by default.
 
 ## Telegram or Discord after onboarding
 
+**Production (recommended):** keep the bot online with the OS background service — same idea as OpenClaw’s gateway daemon or a Hermes `systemd` unit. Always run these from the **project directory** that contains `.env` and `helloagi.json` (and use the **same venv** you used for `pip install`, so the scheduled/unit command resolves `agi_runtime`).
+
 1. Install the Telegram extra: `pip install "helloagi[rich,telegram]"` (or `pip install -e ".[rich,telegram]"` from a clone).
 2. Create a bot with [@BotFather](https://t.me/BotFather) and copy the token into onboarding or into `.env` as `TELEGRAM_BOT_TOKEN`.
-3. Set `ANTHROPIC_API_KEY` in `.env` for Claude-backed replies (unless you use another configured provider).
-4. From the directory that contains `.env` and `helloagi.json`, run:
+3. Set `ANTHROPIC_API_KEY` (or Google/OpenAI) in `.env` for model-backed replies unless you stay in template mode.
+4. Install and **start** the service (install registers the unit; **start** actually brings the bot online):
 
    ```bash
-   helloagi serve --telegram
+   helloagi service install --telegram
+   helloagi service start
+   helloagi service status
    ```
 
 5. In Telegram, open the bot, send `/start`, then chat normally.
 
-Optional: `helloagi service install --telegram` then `helloagi service start` to run detached (same working directory so `.env` is found).
+**Development only:** run in the foreground (stops when you close the terminal):
+
+```bash
+helloagi serve --telegram
+```
+
+If you used **`helloagi onboard`** and agreed to “prepare background service,” the wizard **installs** the unit but does **not** start it automatically in non-interactive mode — you still run **`helloagi service start`** once.
+
+**Non-interactive bots:** use `--runtime-mode hybrid` or `--runtime-mode service`, or pass `--enable-extension telegram`. Pure `--runtime-mode cli` without channel flags skips service preparation.
 
 For Discord:
 
 1. Install the Discord extra: `pip install "helloagi[discord]"`.
 2. Put `DISCORD_BOT_TOKEN=...` in `.env` or enter it during onboarding.
-3. Start it with `helloagi serve --discord` or `helloagi service install --discord`.
+3. **Production:** `helloagi service install --discord` then `helloagi service start`. **Dev:** `helloagi serve --discord`.
 
 ---
 

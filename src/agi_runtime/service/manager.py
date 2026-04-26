@@ -225,8 +225,11 @@ class ServiceManager:
         return "helloagi"
 
     def _service_command(self, cfg: ServiceConfig) -> list[str]:
+        # Resolved absolute interpreter so launchd/systemd/schtasks work when the unit
+        # runs outside the user's shell (venv PATH not required).
+        python_exe = str(Path(sys.executable).resolve())
         command = [
-            sys.executable,
+            python_exe,
             "-m",
             "agi_runtime.cli",
             "serve",

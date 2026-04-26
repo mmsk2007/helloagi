@@ -5,10 +5,25 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from agi_runtime.migration.importer import MigrationImporter
-from agi_runtime.service.manager import ServiceManager
+from agi_runtime.service.manager import ServiceConfig, ServiceManager
 
 
 class TestMigrationAndService(unittest.TestCase):
+    def test_service_command_python_is_absolute(self):
+        manager = ServiceManager(native_control=False)
+        cfg = ServiceConfig(
+            workdir=str(Path.cwd()),
+            host="127.0.0.1",
+            port=8787,
+            config_path="helloagi.json",
+            policy_pack="safe-default",
+            enabled_extensions=["telegram"],
+            auth_required=True,
+        )
+        cmd = manager._service_command(cfg)
+        self.assertTrue(Path(cmd[0]).is_absolute(), msg=f"expected absolute python, got {cmd[0]!r}")
+        self.assertEqual(cmd[1], "-m")
+        self.assertEqual(cmd[2], "agi_runtime.cli")
     def test_openclaw_preview_reads_env_and_json(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

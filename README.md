@@ -131,14 +131,14 @@ The installer launches a real setup flow immediately. The wizard now covers:
 helloagi                                        # Interactive AGI session (auto-onboard on first run)
 helloagi run                                    # Rich TUI with tool panels & governance indicators
 helloagi oneshot --message "What can you do?"   # Single question
-helloagi serve                                  # HTTP API on localhost:8787
-helloagi serve --telegram                       # + Telegram bot
-helloagi serve --discord                        # + Discord bot
-helloagi serve --voice                          # + local wake-word voice channel
 helloagi health                                 # Full local runtime + service health
-helloagi service install --telegram             # Install local background service config
-helloagi service start                          # Start local background service
+helloagi service install --telegram             # Production: install OS service (then service start)
+helloagi service start                          # Start background service (bots go online)
 helloagi service status                         # Inspect service + health
+helloagi serve                                  # Dev: HTTP API on localhost:8787 (foreground)
+helloagi serve --telegram                       # Dev: + Telegram (foreground; closes with terminal)
+helloagi serve --discord                        # Dev: + Discord
+helloagi serve --voice                          # Dev: + local wake-word voice channel
 helloagi migrate --source openclaw              # Preview import from OpenClaw
 helloagi migrate --source openclaw --apply --rename-imports
 helloagi migrate --source hermes --apply        # Import Hermes secrets + artifacts
@@ -231,15 +231,19 @@ cd helloagi
 
 5. **Initialize config** if you skipped it: `helloagi init` (wizard may already create `helloagi.json`).
 
-6. **Start the API + bot** (process stays in the foreground; keep this terminal open):
+6. **Stay online (recommended):** from the same directory as `.env` / `helloagi.json`, install the OS background service, **start** it, then verify. This matches how OpenClaw uses a gateway **daemon** or how Hermes is often run under **systemd** — one long-lived `serve` process supervised by the OS.
 
    ```bash
-   helloagi serve --telegram
+   helloagi service install --telegram
+   helloagi service start
+   helloagi service status
    ```
 
-   Defaults: HTTP API at `http://127.0.0.1:8787`, Telegram long-polling in the same process.
+   Use the **same Python venv** you used for `pip install` when you run these commands (the unit records an absolute interpreter path at install time).
 
 7. **In Telegram**, open your bot, send `/start`, then send a normal message.
+
+   **Try-it / dev:** to skip the system service and test quickly, run `helloagi serve --telegram` in a terminal you keep open (HTTP API at `http://127.0.0.1:8787`; stops when the terminal closes).
 
    By default, Telegram replies hide `allow` governance headers for a more natural chat flow
    (escalate/deny still show). Set `HELLOAGI_TELEGRAM_SHOW_GOV=1` to always show headers.
@@ -253,7 +257,7 @@ cd helloagi
    - `/reminders`
    - `/reminder_cancel <id>` / `/reminder_pause <id>` / `/reminder_resume <id>` / `/reminder_run_now <id>`
 
-**Optional background process:** after `helloagi service install --telegram`, run `helloagi service start`. HelloAGI uses OS-native service backends where possible: Windows Scheduled Task, macOS `launchd`, Linux `systemd --user`.
+If onboarding offered “prepare background service” and you accepted it, HelloAGI **registered** the service but you still run **`helloagi service start`** unless the wizard asked to start immediately (interactive). HelloAGI uses OS-native backends where possible: Windows Scheduled Task, macOS `launchd`, Linux `systemd --user`.
 
 ### Platform, Service, and Secret Model
 
@@ -529,6 +533,8 @@ data: {"text": "Done! I've created...", "tool_calls": 3, "turns": 2}
 ```
 
 ### Telegram, Discord, and Voice
+
+For **production** uptime, prefer `helloagi service install --telegram` (or `--discord`) then `helloagi service start` from the directory with `.env` — see the step-by-step section above. The snippets below are **foreground / dev** (`serve` stops when the shell exits).
 
 ```bash
 export TELEGRAM_BOT_TOKEN=your-token

@@ -758,6 +758,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
 
     prepare_service = False
     service_install_state = None
+    service_started_in_wizard = False
     if runtime_mode != "cli" or telegram_enabled or discord_enabled or voice_enabled:
         prepare_service = options.non_interactive or _yes_no_prompt("Prepare background service now", runtime_mode != "cli")
         if prepare_service:
@@ -775,6 +776,18 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
                 if not service_token:
                     service_token = os.environ.get("HELLOAGI_API_KEY", "")
                 _ok(f"Prepared HelloAGI service ({service_install_state.backend})")
+                if service_install_state and service_install_state.installed:
+                    if options.non_interactive:
+                        _info("Background service is registered but not running. Run: helloagi service start")
+                    elif _yes_no_prompt("Start the HelloAGI service now (channels go online after start)", True):
+                        try:
+                            service_manager.start()
+                            service_started_in_wizard = True
+                            _ok("Service start issued. Check: helloagi service status")
+                        except Exception as exc:
+                            _warn(f"Automatic start failed: {exc}. Run: helloagi service start")
+                    else:
+                        _info("Background service is installed but not started. Run: helloagi service start when ready.")
             except Exception as exc:
                 _warn(f"Service preparation failed: {exc}")
     print()
@@ -884,21 +897,34 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     print(f"    Extensions:   {CYAN}{', '.join(enabled_extensions) if enabled_extensions else 'none'}{NC}")
     if migration_source:
         print(f"    Imported:     {CYAN}{migration_source}{NC}")
+    if cfg.service.background_service and service_install_state and service_install_state.installed:
+        if not service_started_in_wizard:
+            try:
+                st = ServiceManager().status()
+                if not st.get("running"):
+                    print(
+                        f"  {YELLOW}Note:{NC} Background service is installed but {BOLD}not running{NC} yet. "
+                        f"Run: {BOLD}helloagi service start{NC}"
+                    )
+            except Exception:
+                print(f"  {YELLOW}Note:{NC} Run {BOLD}helloagi service start{NC} when you want channels online.")
     print()
     print(f"  {BOLD}Next commands{NC}")
     print(f"    {CYAN}$ {NC}{BOLD}helloagi run{NC}")
     print(f"    {CYAN}$ {NC}{BOLD}helloagi health{NC}")
     if cfg.service.background_service:
-        print(f"    {CYAN}$ {NC}{BOLD}helloagi service start{NC}")
+        if not service_started_in_wizard:
+            print(f"    {CYAN}$ {NC}{BOLD}helloagi service start{NC}")
         print(f"    {CYAN}$ {NC}{BOLD}helloagi service status{NC}")
-    elif runtime_mode != "cli":
+    elif runtime_mode != "cli" or telegram_enabled or discord_enabled or voice_enabled:
         print(f"    {CYAN}$ {NC}{BOLD}helloagi service install --extension {' --extension '.join(enabled_extensions)}{NC}" if enabled_extensions else f"    {CYAN}$ {NC}{BOLD}helloagi service install{NC}")
+        print(f"    {CYAN}$ {NC}{BOLD}helloagi service start{NC}")
     if telegram_enabled:
-        print(f"    {CYAN}$ {NC}{BOLD}helloagi serve --telegram{NC}")
+        print(f"    {DIM}Dev (foreground):{NC} {CYAN}$ {NC}{BOLD}helloagi serve --telegram{NC}")
     if discord_enabled:
-        print(f"    {CYAN}$ {NC}{BOLD}helloagi serve --discord{NC}")
+        print(f"    {DIM}Dev (foreground):{NC} {CYAN}$ {NC}{BOLD}helloagi serve --discord{NC}")
     if voice_enabled:
-        print(f"    {CYAN}$ {NC}{BOLD}helloagi serve --voice{NC}")
+        print(f"    {DIM}Dev (foreground):{NC} {CYAN}$ {NC}{BOLD}helloagi serve --voice{NC}")
     print(f"    {CYAN}$ {NC}{BOLD}helloagi onboard-status{NC}")
     print()
     if primary_provider == "template":
