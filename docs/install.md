@@ -349,4 +349,4 @@ rm -f helloagi.json helloagi.onboard.json
 rm -rf memory/
 ```
 
-See also: [Updating](updating.md) and [Uninstall](uninstall.md)
+See also: [Updating](updating.md) and [Uninstall](uninstall.md). For streaming hooks and reminder vs cron scope, see [streaming-contract.md](streaming-contract.md), [reminders-scheduling.md](reminders-scheduling.md), and [peer-parity-roadmap.md](peer-parity-roadmap.md).

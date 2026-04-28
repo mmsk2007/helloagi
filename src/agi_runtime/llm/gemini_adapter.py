@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
@@ -71,6 +72,84 @@ def function_call_args_as_dict(fc: Any) -> Dict[str, Any]:
         return dict(args)
     except Exception:
         return {}
+
+
+@dataclass
+class GeminiStreamAccumulator:
+    """Incremental merge of ``generate_content_stream`` chunks (testable, reusable)."""
+
+    on_stream: Optional[Any] = None
+    segments: List[Any] = field(default_factory=list)  # ("text", str) or ("fc", Any)
+    emitted_fc_boundary: bool = False
+
+    def _emit_stream_text(self, delta: str) -> None:
+        if not self.on_stream or not delta:
+            return
+        try:
+            self.on_stream(delta)
+        except Exception:
+            pass
+
+    def _emit_fc_boundary(self) -> None:
+        if not self.on_stream or self.emitted_fc_boundary:
+            return
+        try:
+            self.on_stream(None)
+        except Exception:
+            pass
+        self.emitted_fc_boundary = True
+
+    def apply_chunk(self, chunk: Any) -> None:
+        if not _GENAI_TYPES:
+            raise ImportError("google-genai is required")
+        if not getattr(chunk, "candidates", None):
+            return
+        cand0 = chunk.candidates[0]
+        content = getattr(cand0, "content", None)
+        if not content:
+            return
+        parts = getattr(content, "parts", None) or []
+        for part in parts:
+            t = getattr(part, "text", None)
+            if t:
+                if self.segments and self.segments[-1][0] == "text":
+                    self.segments[-1] = ("text", self.segments[-1][1] + t)
+                else:
+                    self.segments.append(("text", t))
+                self._emit_stream_text(t)
+            fc = getattr(part, "function_call", None)
+            if fc is not None:
+                self._emit_fc_boundary()
+                self.segments.append(("fc", fc))
+
+    def finish(self) -> Any:
+        from types import SimpleNamespace
+
+        if not _GENAI_TYPES:
+            raise ImportError("google-genai is required")
+        parts_out: List[Any] = []
+        if not self.segments:
+            parts_out.append(genai_types.Part.from_text(text=""))
+        else:
+            for kind, payload in self.segments:
+                if kind == "text":
+                    parts_out.append(genai_types.Part.from_text(text=payload))
+                else:
+                    parts_out.append(genai_types.Part(function_call=payload))
+
+        model_content = genai_types.Content(role="model", parts=parts_out)
+        return SimpleNamespace(candidates=[SimpleNamespace(content=model_content)])
+
+
+def reduce_gemini_stream_chunks(
+    chunks: List[Any],
+    on_stream: Optional[Any] = None,
+) -> Any:
+    """Merge streamed chunks into one synthetic response (see :class:`GeminiStreamAccumulator`)."""
+    acc = GeminiStreamAccumulator(on_stream=on_stream)
+    for chunk in chunks:
+        acc.apply_chunk(chunk)
+    return acc.finish()
 
 
 def build_generate_config(

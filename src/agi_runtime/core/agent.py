@@ -246,6 +246,10 @@ class HelloAGIAgent:
         self.on_stream: Optional[Callable] = None
         self.on_tool_start: Optional[Callable] = None
         self.on_tool_end: Optional[Callable] = None
+        # Hermes-style hook: (turn_index:int, planned_tools:list[dict]) after each
+        # LLM response is parsed and before tools execute. planned_tools entries
+        # are {"name": str, "input": dict}.
+        self.step_callback: Optional[Callable[[int, List[dict]], None]] = None
 
         # Active channel context: set by the channel layer (e.g. TelegramChannel)
         # immediately before think() so outbound tools (send_file, send_image)
@@ -889,8 +893,10 @@ class HelloAGIAgent:
 
     async def _handle_delegation(self, goal: str, context: str, toolset_filter: str, max_turns: int) -> str:
         """Spawn an isolated sub-agent to handle a delegated task."""
+        if self._llm_provider == "google":
+            return await self._handle_delegation_gemini(goal, context, toolset_filter, max_turns)
         if not self._claude:
-            return "Cannot delegate: LLM backbone not configured."
+            return "Cannot delegate: Anthropic backbone not configured (set keys for Claude or use HELLOAGI_LLM_PROVIDER=google for Gemini)."
 
         # Build restricted tool list
         if toolset_filter:
@@ -986,6 +992,146 @@ class HelloAGIAgent:
             sub_history.append({"role": "user", "content": tool_results})
 
         return f"Sub-agent completed {sub_max} turns on: {goal}"
+
+    async def _handle_delegation_gemini(
+        self, goal: str, context: str, toolset_filter: str, max_turns: int
+    ) -> str:
+        """Isolated Gemini sub-loop for ``delegate_task`` (mirrors Claude delegation)."""
+        from google.genai import types as gtypes
+        from agi_runtime.llm.gemini_adapter import (
+            build_generate_config,
+            claude_tools_to_gemini_tool,
+            extract_model_content,
+            function_call_args_as_dict,
+            genai_types_available,
+            response_text_and_calls,
+        )
+        from agi_runtime.models.gemini_router import route_gemini_model
+
+        if not genai_types_available() or not self._gemini_client:
+            return "Cannot delegate: Gemini backbone not configured."
+
+        if toolset_filter:
+            allowed = [t.strip() for t in toolset_filter.split(",")]
+            tools = [s for s in self._get_tool_schemas() if s["name"] in allowed]
+        else:
+            blocked = {"delegate_task", "skill_create", "skill_invoke"}
+            tools = [s for s in self._get_tool_schemas() if s["name"] not in blocked]
+
+        sub_system = self._build_sub_agent_system_prompt(
+            goal=goal, context=context, max_turns=max_turns
+        )
+        gemini_tool = claude_tools_to_gemini_tool(tools)
+        seed = f"Task: {goal}\n\nContext: {context}"
+        contents: List[Any] = [
+            gtypes.Content(role="user", parts=[gtypes.Part.from_text(text=seed)]),
+        ]
+        model_id = route_gemini_model(
+            seed,
+            default_tier=getattr(self.settings, "default_model_tier", "balanced"),
+        ).model
+        config = build_generate_config(
+            system_instruction=sub_system,
+            gemini_tool=gemini_tool,
+            max_output_tokens=min(self.MAX_OUTPUT_TOKENS, 8192),
+        )
+        sub_max = min(max_turns, 15)
+
+        for turn in range(sub_max):
+            try:
+                response, model_id = await self._gemini_generate_with_resilience(
+                    model_id=model_id,
+                    contents=contents,
+                    config=config,
+                    turn=turn,
+                    on_stream=self.on_stream,
+                )
+            except Exception as e:
+                return f"Sub-agent LLM error: {e}"
+
+            try:
+                model_content = extract_model_content(response)
+            except Exception as e:
+                return f"Sub-agent empty response: {e}"
+            contents.append(model_content)
+            plain_text, raw_calls = response_text_and_calls(response)
+            tool_calls: List[ToolCall] = []
+            for idx, fc in enumerate(raw_calls):
+                name = getattr(fc, "name", None) or ""
+                if not name:
+                    continue
+                args = function_call_args_as_dict(fc)
+                tid = f"delegate_g_{turn}_{idx}_{name}"
+                tool_calls.append(ToolCall(id=tid, name=name, input=args))
+
+            if not tool_calls:
+                final = (plain_text or "").strip()
+                self.journal.write(
+                    "delegation_complete",
+                    {"goal": goal[:200], "turns": turn + 1, "provider": "google"},
+                )
+                return final
+
+            self._emit_step_callback(turn + 1, tool_calls)
+
+            func_response_parts = []
+            for tc in tool_calls:
+                tool_def = self.tool_registry.get(tc.name)
+                tool_risk = tool_def.risk.value if tool_def else "medium"
+                tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
+                if tool_gov.decision == "deny":
+                    out = f"BLOCKED by SRG: {'; '.join(tool_gov.reasons)}"
+                    func_response_parts.append(
+                        gtypes.Part.from_function_response(name=tc.name, response={"result": out})
+                    )
+                    continue
+                if not self.circuit_breaker.can_execute(tc.name):
+                    out = f"Circuit breaker open for '{tc.name}' — skipped."
+                    func_response_parts.append(
+                        gtypes.Part.from_function_response(name=tc.name, response={"result": out})
+                    )
+                    continue
+                result = await self._execute_tool(tc.name, tc.input)
+                if result.ok:
+                    self.circuit_breaker.record_success(tc.name)
+                else:
+                    self.circuit_breaker.record_failure(tc.name)
+                self.journal.write(
+                    "delegation_tool", {"goal": goal[:100], "tool": tc.name, "ok": result.ok}
+                )
+                out = result.to_content()[:5000]
+                func_response_parts.append(
+                    gtypes.Part.from_function_response(name=tc.name, response={"result": out})
+                )
+
+            contents.append(gtypes.Content(role="tool", parts=func_response_parts))
+
+        return f"Sub-agent completed {sub_max} turns on: {goal}"
+
+    def _emit_step_callback(self, turn: int, tool_calls: List[ToolCall]) -> None:
+        if not self.step_callback:
+            return
+        try:
+            planned = [{"name": tc.name, "input": dict(tc.input or {})} for tc in tool_calls]
+            self.step_callback(turn, planned)
+        except Exception:
+            pass
+
+    async def _aggregate_gemini_stream_async(self, stream_iter: Any, on_stream: Optional[Callable]) -> Any:
+        from agi_runtime.llm.gemini_adapter import GeminiStreamAccumulator
+
+        def _safe_stream_cb(chunk: Any) -> None:
+            if not on_stream:
+                return
+            try:
+                on_stream(chunk)
+            except Exception as exc:
+                self.journal.write("on_stream_error", {"error": str(exc)[:300], "provider": "google"})
+
+        acc = GeminiStreamAccumulator(on_stream=_safe_stream_cb if on_stream else None)
+        async for chunk in stream_iter:
+            acc.apply_chunk(chunk)
+        return acc.finish()
 
     # ── Anthropic streaming helper ─────────────────────────────
 
@@ -1460,6 +1606,8 @@ class HelloAGIAgent:
                 tool_call_count=len(tool_calls),
             )
 
+            self._emit_step_callback(turns_used, tool_calls)
+
             if not tool_calls:
                 final_text = "\n".join(text_parts)
 
@@ -1549,7 +1697,9 @@ class HelloAGIAgent:
                         self.on_tool_end(tc.name, False, result_content)
                     continue
 
-                if tc.name == "delegate_task" and self._claude:
+                if tc.name == "delegate_task":
+                    if self.on_tool_start:
+                        self.on_tool_start(tc.name, tc.input, "allow")
                     delegation_result = await self._handle_delegation(
                         goal=tc.input.get("goal", ""),
                         context=tc.input.get("context", ""),
@@ -1562,8 +1712,6 @@ class HelloAGIAgent:
                         "content": delegation_result,
                     })
                     self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": True})
-                    if self.on_tool_start:
-                        self.on_tool_start(tc.name, tc.input, "allow")
                     if self.on_tool_end:
                         self.on_tool_end(tc.name, True, delegation_result[:200])
                     continue
@@ -1725,8 +1873,14 @@ class HelloAGIAgent:
         contents: List[Any],
         config: Any,
         turn: int,
+        on_stream: Optional[Callable[..., Any]] = None,
     ) -> tuple[Any, str]:
-        """Call Gemini generate_content with exponential backoff on overload, then stable fallback."""
+        """Call Gemini generate_content (or stream) with backoff on overload, then stable fallback.
+
+        When *on_stream* is set and ``client.aio`` is available, uses
+        ``generate_content_stream`` so token deltas reach Telegram (same contract
+        as Anthropic: str deltas and ``None`` at the first function_call).
+        """
         from agi_runtime.models.gemini_router import GEMINI_FALLBACK_STABLE
 
         backoff_delays = [0.0, 1.5, 3.0, 6.0, 12.0]
@@ -1755,23 +1909,57 @@ class HelloAGIAgent:
         if model_id != GEMINI_FALLBACK_STABLE:
             models.append(GEMINI_FALLBACK_STABLE)
 
+        aio_client = getattr(self._gemini_client, "aio", None)
+        use_stream = on_stream is not None and aio_client is not None
+
+        async def _one_call(mid: str, try_stream: bool) -> Any:
+            if try_stream:
+                stream_source = aio_client.models.generate_content_stream(
+                    model=mid,
+                    contents=contents,
+                    config=config,
+                )
+                if hasattr(stream_source, "__aiter__"):
+                    stream_iter = stream_source
+                else:
+                    stream_iter = await stream_source
+                return await self._aggregate_gemini_stream_async(stream_iter, on_stream)
+            return self._gemini_client.models.generate_content(
+                model=mid,
+                contents=contents,
+                config=config,
+            )
+
         for mid in models:
             for attempt, delay in enumerate(backoff_delays):
                 if delay:
                     await asyncio.sleep(delay)
                 try:
-                    resp = self._gemini_client.models.generate_content(
-                        model=mid,
-                        contents=contents,
-                        config=config,
-                    )
+                    if use_stream:
+                        try:
+                            resp = await _one_call(mid, True)
+                            return resp, mid
+                        except Exception as e_stream:
+                            self.journal.write(
+                                "gemini_stream_fallback",
+                                {"model": mid, "reason": str(e_stream)[:300], "turn": turn},
+                            )
+                            resp = await _one_call(mid, False)
+                            return resp, mid
+                    resp = await _one_call(mid, False)
                     return resp, mid
                 except Exception as e:
                     last_exc = e
                     kind = classify(e)
                     self.journal.write(
                         "gemini_generate_attempt",
-                        {"model": mid, "attempt": attempt, "kind": kind, "turn": turn},
+                        {
+                            "model": mid,
+                            "attempt": attempt,
+                            "kind": kind,
+                            "turn": turn,
+                            "stream": use_stream,
+                        },
                     )
                     if kind == "other":
                         raise
@@ -1880,6 +2068,7 @@ class HelloAGIAgent:
                     contents=contents,
                     config=config,
                     turn=turn,
+                    on_stream=self.on_stream,
                 )
             except Exception as e:
                 self.journal.write("llm_error", {"error": str(e), "turn": turn, "provider": "google"})
@@ -1913,6 +2102,8 @@ class HelloAGIAgent:
                 args = function_call_args_as_dict(fc)
                 tid = f"gemini_{turn}_{idx}_{name}"
                 tool_calls.append(ToolCall(id=tid, name=name, input=args))
+
+            self._emit_step_callback(turns_used, tool_calls)
 
             self._history.append({
                 "role": "assistant",
@@ -2006,21 +2197,27 @@ class HelloAGIAgent:
                     continue
 
                 if tc.name == "delegate_task":
-                    msg = (
-                        "delegate_task is only supported with the Anthropic backbone. "
-                        "Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN and HELLOAGI_LLM_PROVIDER=anthropic, "
-                        "or complete the task without delegating."
+                    if self.on_tool_start:
+                        self.on_tool_start(tc.name, tc.input, "allow")
+                    delegation_result = await self._handle_delegation(
+                        goal=tc.input.get("goal", ""),
+                        context=tc.input.get("context", ""),
+                        toolset_filter=tc.input.get("toolset", ""),
+                        max_turns=tc.input.get("max_turns", 15),
                     )
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tc.id,
-                        "content": msg,
+                        "content": delegation_result,
                     })
                     func_response_parts.append(
-                        gtypes.Part.from_function_response(name=tc.name, response={"result": msg})
+                        gtypes.Part.from_function_response(
+                            name=tc.name, response={"result": delegation_result}
+                        )
                     )
+                    self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": True})
                     if self.on_tool_end:
-                        self.on_tool_end(tc.name, False, msg)
+                        self.on_tool_end(tc.name, True, delegation_result[:200])
                     continue
 
                 tool_def = self.tool_registry.get(tc.name)
