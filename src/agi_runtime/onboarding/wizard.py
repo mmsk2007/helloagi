@@ -776,6 +776,24 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
                 if not service_token:
                     service_token = os.environ.get("HELLOAGI_API_KEY", "")
                 _ok(f"Prepared HelloAGI service ({service_install_state.backend})")
+                _warn(
+                    "Installed is not the same as running: Telegram/Discord stay offline until the "
+                    "background process is started once."
+                )
+                _info("From this directory (same venv you used for onboarding), run:")
+                _info("  helloagi service start")
+                _info("  helloagi service status")
+                _info("After upgrades or if the bot never comes online, run: helloagi service doctor")
+                _info("and: helloagi service reinstall")
+                if backend == "windows-task":
+                    _info(
+                        "Windows: default task trigger is user logon (ONLOGON). For boot-before-logon, set "
+                        "HELLOAGI_WINDOWS_TASK_SCHEDULE=onstart then reinstall (may need Administrator)."
+                    )
+                elif backend == "systemd-user":
+                    _info("Linux: user systemd unit — enable survives login when lingering is on: loginctl enable-linger $USER")
+                elif backend == "launchd":
+                    _info("macOS: LaunchAgent loads at login; RunAtLoad + KeepAlive are set in the plist.")
                 if service_install_state and service_install_state.installed:
                     if options.non_interactive:
                         _info("Background service is registered but not running. Run: helloagi service start")

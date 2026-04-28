@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/HelloAGI.png" alt="HelloAGI" width="650">
+  <img src="docs/assets/HelloAGI.png" alt="HelloAGI" width="320">
 </p>
 <h1 align="center">HelloAGI</h1>
 <p align="center">
@@ -11,11 +11,12 @@
   <a href="https://github.com/mmsk2007/helloagi/blob/main/LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT">
   </a>
-  <a href="https://pypi.org/project/helloagi/">
-    <img src="https://img.shields.io/pypi/v/helloagi.svg" alt="PyPI Version">
+  <a href="https://github.com/mmsk2007/helloagi/releases">
+    <img src="https://img.shields.io/github/v/release/mmsk2007/helloagi?label=release&logo=github" alt="GitHub release">
   </a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue.svg" alt="Python 3.9+">
   <a href="https://pypi.org/project/helloagi/">
-    <img src="https://img.shields.io/pypi/pyversions/helloagi.svg" alt="Python 3.9+">
+    <img src="https://img.shields.io/badge/PyPI-not%20published-lightgrey" alt="PyPI: not published yet (install from GitHub or scripts)">
   </a>
   <a href="#srg-deterministic-governance">
     <img src="https://img.shields.io/badge/Governance-SRG-purple.svg" alt="SRG Governance">
@@ -268,6 +269,8 @@ cd helloagi
    - `/reminder_cancel <id>` / `/reminder_pause <id>` / `/reminder_resume <id>` / `/reminder_run_now <id>`
 
 If onboarding offered “prepare background service” and you accepted it, HelloAGI **registered** the service but you still run **`helloagi service start`** unless the wizard asked to start immediately (interactive). HelloAGI uses OS-native backends where possible: Windows Scheduled Task, macOS `launchd`, Linux `systemd --user`.
+
+**Deployment (systemd / Windows Task Scheduler / Docker, doctor + reinstall):** see [docs/deployment.md](docs/deployment.md).
 
 ### Platform, Service, and Secret Model
 

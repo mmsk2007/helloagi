@@ -620,6 +620,49 @@ def service_uninstall():
     print({"installed": cfg.installed, "running": False, "backend": cfg.backend})
 
 
+def service_reinstall(args):
+    """Rewrite unit/manifest from saved service state (after venv move or upgrade)."""
+    from agi_runtime.extensions.manager import ExtensionManager
+    from agi_runtime.service.manager import ServiceManager
+
+    extension_names = list(args.extension or [])
+    if getattr(args, "voice", False) and "voice" not in extension_names:
+        extension_names.append("voice")
+    for enabled_name in ExtensionManager().enabled_names(category="channel"):
+        if enabled_name not in extension_names:
+            extension_names.append(enabled_name)
+    sm = ServiceManager()
+    cfg = sm.reinstall(
+        host=args.host,
+        port=args.port,
+        config_path=args.config,
+        policy_pack=args.policy,
+        telegram=True if args.telegram else None,
+        discord=True if args.discord else None,
+        enabled_extensions=extension_names if extension_names else None,
+        workdir=args.workdir,
+        require_auth=None,
+    )
+    print(
+        {
+            "installed": cfg.installed,
+            "backend": cfg.backend,
+            "native_registered": cfg.native_registered,
+            "manifest_path": cfg.manifest_path,
+            "workdir": cfg.workdir,
+            "extensions": cfg.enabled_extensions,
+            "last_error": cfg.last_error,
+            "note": "Run `helloagi service start` if the bot should be online now.",
+        }
+    )
+
+
+def service_doctor():
+    from agi_runtime.service.manager import ServiceManager
+
+    print(ServiceManager().doctor())
+
+
 def migrate(source: str, path: str = None, apply: bool = False, overwrite: bool = False, rename_imports: bool = False):
     from agi_runtime.migration.importer import MigrationImporter
 
@@ -947,6 +990,23 @@ def main():
     service_sub.add_parser("stop", help="stop local background service")
     service_sub.add_parser("status", help="show local background service status")
     service_sub.add_parser("uninstall", help="remove local background service config")
+    service_reinstallp = service_sub.add_parser(
+        "reinstall",
+        help="rewrite manifest and re-register OS service (same as install after venv move or upgrade)",
+    )
+    service_reinstallp.add_argument("--host", default=None)
+    service_reinstallp.add_argument("--port", type=int, default=None)
+    service_reinstallp.add_argument("--config", default=None)
+    service_reinstallp.add_argument("--policy", default=None)
+    service_reinstallp.add_argument("--telegram", action="store_true")
+    service_reinstallp.add_argument("--discord", action="store_true")
+    service_reinstallp.add_argument("--voice", action="store_true")
+    service_reinstallp.add_argument("--extension", action="append", default=[], help="enable a named extension (repeatable)")
+    service_reinstallp.add_argument("--workdir", default=None, help="override working directory (default: keep existing)")
+    service_sub.add_parser(
+        "doctor",
+        help="check service manifest vs current interpreter and registration (lightweight)",
+    )
 
     migratep = sub.add_parser("migrate", help="import config and secrets from another agent runtime")
     migratep.add_argument("--source", choices=["openclaw", "hermes"], required=True)
@@ -1089,8 +1149,14 @@ def main():
             service_status()
         elif args.service_cmd == "uninstall":
             service_uninstall()
+        elif args.service_cmd == "reinstall":
+            service_reinstall(args)
+        elif args.service_cmd == "doctor":
+            service_doctor()
         else:
-            parser.error("service requires a subcommand: install, start, stop, status, uninstall")
+            parser.error(
+                "service requires a subcommand: install, reinstall, doctor, start, stop, status, uninstall"
+            )
     elif args.cmd == "migrate":
         migrate(args.source, args.path, args.apply, args.overwrite, args.rename_imports)
     elif args.cmd == "extensions":

@@ -167,6 +167,98 @@ class ServiceManager:
         self.save(cfg)
         return cfg
 
+    def reinstall(
+        self,
+        *,
+        host: str | None = None,
+        port: int | None = None,
+        config_path: str | None = None,
+        policy_pack: str | None = None,
+        telegram: bool | None = None,
+        discord: bool | None = None,
+        enabled_extensions: list[str] | None = None,
+        workdir: str | None = None,
+        require_auth: bool | None = None,
+        auth_env_key: str | None = None,
+    ) -> ServiceConfig:
+        """Rewrite manifest and re-register the OS unit (e.g. after venv move or `pip install -U`).
+
+        Stops the service first when possible so schedulers pick up the new command line.
+        """
+        cfg = self.load()
+        if not cfg.installed:
+            raise RuntimeError("Service is not installed. Run `helloagi service install` first.")
+        try:
+            self.stop()
+        except Exception:
+            pass
+        exts = list(enabled_extensions) if enabled_extensions is not None else list(cfg.enabled_extensions)
+        return self.install(
+            host=cfg.host if host is None else host,
+            port=int(cfg.port if port is None else port),
+            config_path=cfg.config_path if config_path is None else config_path,
+            policy_pack=cfg.policy_pack if policy_pack is None else policy_pack,
+            telegram=cfg.telegram if telegram is None else bool(telegram),
+            discord=cfg.discord if discord is None else bool(discord),
+            enabled_extensions=exts,
+            workdir=cfg.workdir if workdir is None else workdir,
+            require_auth=cfg.auth_required if require_auth is None else bool(require_auth),
+            auth_env_key=cfg.auth_env_key if auth_env_key is None else auth_env_key,
+        )
+
+    def doctor(self) -> dict[str, Any]:
+        """Best-effort checks for manifest / interpreter drift (OpenClaw-style `doctor` light)."""
+        cfg = self.load()
+        out: dict[str, Any] = {"installed": cfg.installed}
+        if not cfg.installed:
+            out["ok"] = True
+            out["issues"] = []
+            out["recommendations"] = [
+                "Run `helloagi service install --telegram` (add `--discord` as needed) when you want a background service.",
+            ]
+            return out
+
+        issues: list[str] = []
+        recs: list[str] = []
+        exe = str(Path(sys.executable).resolve())
+        mp = Path(cfg.manifest_path) if cfg.manifest_path else None
+        if mp and mp.exists():
+            blob = mp.read_text(encoding="utf-8", errors="replace")
+            if exe not in blob:
+                issues.append("interpreter_path_mismatch")
+                recs.append(
+                    f"Manifest does not reference the current interpreter ({exe}). "
+                    "Run `helloagi service reinstall` from the venv you intend to run."
+                )
+        else:
+            issues.append("manifest_missing")
+            recs.append("Manifest path missing on disk. Run `helloagi service reinstall`.")
+
+        if not cfg.native_registered:
+            issues.append("native_not_registered")
+            recs.append("OS scheduler registration was not completed; re-run `helloagi service install`.")
+
+        notes: list[str] = []
+        win_trig = os.environ.get("HELLOAGI_WINDOWS_TASK_SCHEDULE", "onlogon")
+        if cfg.backend == "windows-task":
+            wt = win_trig.strip().lower()
+            out["windows_task_schedule"] = wt
+            if wt in ("onstart", "startup", "boot"):
+                notes.append(
+                    "HELLOAGI_WINDOWS_TASK_SCHEDULE selects ONSTART; schtasks /Create may require "
+                    "an elevated (Administrator) shell."
+                )
+
+        out["issues"] = issues
+        out["recommendations"] = recs
+        out["notes"] = notes
+        out["ok"] = len(issues) == 0
+        out["backend"] = cfg.backend
+        out["workdir"] = cfg.workdir
+        out["manifest_path"] = cfg.manifest_path
+        out["interpreter"] = exe
+        return out
+
     def status(self) -> dict[str, Any]:
         cfg = self.load()
         running = self._is_running(cfg)
@@ -299,9 +391,12 @@ class ServiceManager:
             "[Service]\n"
             "Type=simple\n"
             f"WorkingDirectory={cfg.workdir}\n"
+            "Environment=PYTHONUNBUFFERED=1\n"
             f"ExecStart={command_text}\n"
             "Restart=on-failure\n"
-            "RestartSec=3\n\n"
+            "RestartSec=5\n"
+            "StartLimitIntervalSec=120\n"
+            "StartLimitBurst=10\n\n"
             "[Install]\n"
             "WantedBy=default.target\n"
         )
@@ -313,13 +408,16 @@ class ServiceManager:
             if not self.native_control:
                 return False
             if cfg.backend == "windows-task":
+                trigger = os.environ.get("HELLOAGI_WINDOWS_TASK_SCHEDULE", "onlogon").strip().lower()
+                # ONLOGON: current user session (default). ONSTART: machine boot (may require elevated shell).
+                sc_flag = "ONSTART" if trigger in ("onstart", "startup", "boot") else "ONLOGON"
                 subprocess.run(
                     [
                         "schtasks",
                         "/Create",
                         "/F",
                         "/SC",
-                        "ONLOGON",
+                        sc_flag,
                         "/TN",
                         cfg.service_name,
                         "/TR",

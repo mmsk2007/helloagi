@@ -158,6 +158,8 @@ The container runs the HTTP API server on port 8787 by default.
 
 5. In Telegram, open the bot, send `/start`, then chat normally.
 
+**After upgrades:** run `helloagi service doctor` then `helloagi service reinstall` if the doctor reports an interpreter mismatch, then `helloagi service start` again. Details: [deployment.md](deployment.md).
+
 **Development only:** run in the foreground (stops when you close the terminal):
 
 ```bash
@@ -349,4 +351,4 @@ rm -f helloagi.json helloagi.onboard.json
 rm -rf memory/
 ```
 
-See also: [Updating](updating.md) and [Uninstall](uninstall.md). For streaming hooks and reminder vs cron scope, see [streaming-contract.md](streaming-contract.md), [reminders-scheduling.md](reminders-scheduling.md), and [peer-parity-roadmap.md](peer-parity-roadmap.md).
+See also: [Updating](updating.md), [Uninstall](uninstall.md), and **[Deployment / staying online](deployment.md)** (systemd, Windows tasks, Docker, `service doctor` / `reinstall`). For streaming hooks and reminder vs cron scope, see [streaming-contract.md](streaming-contract.md), [reminders-scheduling.md](reminders-scheduling.md), and [peer-parity-roadmap.md](peer-parity-roadmap.md).
