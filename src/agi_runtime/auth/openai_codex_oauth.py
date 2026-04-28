@@ -6,6 +6,11 @@ project (override with ``HELLOAGI_OPENAI_OAUTH_CLIENT_ID``). This flow is
 
 Tokens live in ``memory/openai_codex_oauth.json`` (password-equivalent). Do not
 commit or share that file.
+
+If ``https://auth.openai.com`` returns **unknown_error** in the browser, the
+community OAuth ``client_id`` + ``redirect_uri`` pair is often not accepted by
+OpenAI. Use **official** ``codex login`` (OpenAI Codex CLI) once, then
+``helloagi auth import-codex``.
 """
 
 from __future__ import annotations
@@ -52,6 +57,105 @@ def _scope() -> str:
 def _redirect_uri(port: int) -> str:
     host = (os.environ.get("HELLOAGI_OPENAI_OAUTH_BIND", "127.0.0.1") or "127.0.0.1").strip()
     return f"http://{host}:{port}{DEFAULT_REDIRECT_PATH}"
+
+
+def default_codex_auth_json_path() -> Path:
+    """Codex CLI default: ``$CODEX_HOME/auth.json`` or ``~/.codex/auth.json``."""
+    home = os.environ.get("CODEX_HOME", "").strip()
+    if home:
+        return Path(home) / "auth.json"
+    return Path.home() / ".codex" / "auth.json"
+
+
+def _jwt_exp_unix(access_token: str) -> float | None:
+    """Return JWT ``exp`` as Unix time, if the token looks like a JWT."""
+    try:
+        parts = access_token.split(".")
+        if len(parts) < 2:
+            return None
+        seg = parts[1]
+        pad = "=" * (-len(seg) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(seg + pad))
+        exp = payload.get("exp")
+        return float(exp) if exp is not None else None
+    except Exception:
+        return None
+
+
+def _extract_token_blob(data: dict[str, Any]) -> dict[str, Any]:
+    t = data.get("tokens")
+    if isinstance(t, dict):
+        return t
+    return data
+
+
+def _pick_client_id(data: dict[str, Any], blob: dict[str, Any]) -> str:
+    for d in (blob, data):
+        for k in ("client_id", "oauth_client_id", "OAuthClientId"):
+            v = d.get(k)
+            if isinstance(v, str) and v.strip().startswith("app_"):
+                return v.strip()
+    return _client_id()
+
+
+def _expires_at_from_blob(access_token: str, blob: dict[str, Any]) -> float:
+    skew = 120.0
+    if blob.get("expires_at") is not None:
+        try:
+            raw = float(blob["expires_at"])
+            # Heuristic: ms vs s
+            if raw > 1e12:
+                raw = raw / 1000.0
+            return raw - skew
+        except (TypeError, ValueError):
+            pass
+    jwt_exp = _jwt_exp_unix(access_token)
+    if jwt_exp:
+        return jwt_exp - skew
+    try:
+        ei = int(blob.get("expires_in") or 0)
+        if ei > 0:
+            return time.time() + ei - skew
+    except (TypeError, ValueError):
+        pass
+    return time.time() + 3600.0 - skew
+
+
+def import_codex_auth_json(source: Path | None = None) -> LoginResult:
+    """Copy tokens from the official Codex CLI ``auth.json`` into HelloAGI's store."""
+    path = source or default_codex_auth_json_path()
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Codex auth file not found: {path}\n"
+            "Install the official Codex CLI and run:  codex login\n"
+            "Or pass an explicit file:  helloagi auth import-codex --path C:\\path\\to\\auth.json"
+        )
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("auth.json must contain a JSON object")
+    blob = _extract_token_blob(raw)
+    access = blob.get("access_token") or raw.get("access_token")
+    if not access or not isinstance(access, str):
+        raise ValueError(
+            f"No access_token in {path}. Open Codex CLI, run `codex login`, "
+            "and ensure credentials are stored as a file (see OpenAI Codex docs: file-based auth)."
+        )
+    refresh = str(blob.get("refresh_token") or raw.get("refresh_token") or "")
+    cid = _pick_client_id(raw, blob)
+    exp_at = _expires_at_from_blob(access, blob if isinstance(blob, dict) else {})
+    store = {
+        "client_id": cid,
+        "scope": raw.get("scope") or blob.get("scope") or DEFAULT_SCOPE,
+        "access_token": access.strip(),
+        "refresh_token": refresh.strip(),
+        "expires_at": exp_at,
+        "token_type": str(blob.get("token_type") or raw.get("token_type") or "Bearer"),
+        "updated_at": time.time(),
+        "imported_from": str(path.resolve()),
+    }
+    save_oauth_store(store)
+    os.environ["OPENAI_AUTH_TOKEN"] = access.strip()
+    return LoginResult(access_token=access.strip(), refresh_token=refresh.strip(), expires_at=exp_at)
 
 
 def _pkce_pair() -> tuple[str, str]:
@@ -279,6 +383,13 @@ def run_browser_oauth_login(
     print_fn("")
     print_fn("OpenAI ChatGPT / Codex OAuth (PKCE)")
     print_fn("-------------------------------------")
+    print_fn(
+        "If login fails with OpenAI **unknown_error**, use the official Codex CLI instead:\n"
+        "  codex login\n"
+        "then import:\n"
+        "  helloagi auth import-codex\n"
+        "(OpenAI only accepts certain OAuth client + redirect combinations.)\n"
+    )
     print_fn(f"1. A browser will open (or open this URL yourself):\n\n   {url}\n")
     print_fn(
         "2. After you sign in, you will be redirected to localhost.\n"

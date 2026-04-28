@@ -806,6 +806,21 @@ def auth_login_openai(*, no_browser: bool = False, port: int | None = None) -> N
     print("      helloagi health")
 
 
+def auth_import_codex(path: str | None) -> None:
+    """Import tokens from official Codex CLI auth.json into HelloAGI OAuth store."""
+    from pathlib import Path
+
+    from agi_runtime.auth.openai_codex_oauth import import_codex_auth_json, oauth_store_path
+
+    src = Path(path).expanduser() if path else None
+    res = import_codex_auth_json(src)
+    print(f"Imported Codex tokens into {oauth_store_path()}")
+    print(f"Access token expires at epoch ~{res.expires_at:.0f} (refreshed automatically when used).")
+    print()
+    print("Next: helloagi models set-provider openai")
+    print("      helloagi health")
+
+
 def openclaw(prompt: str, config_path: str, policy_pack: str = "safe-default"):
     import anyio
     from agi_runtime.adapters.openclaw_bridge import run_openclaw_agent
@@ -1119,6 +1134,15 @@ def main():
         default=None,
         help="localhost callback port (default 1455 or HELLOAGI_OPENAI_OAUTH_PORT)",
     )
+    auth_imp = auth_sub.add_parser(
+        "import-codex",
+        help="import OpenAI tokens from official Codex CLI auth.json (~/.codex/auth.json)",
+    )
+    auth_imp.add_argument(
+        "--path",
+        default=None,
+        help="path to auth.json (default: $CODEX_HOME/auth.json or ~/.codex/auth.json)",
+    )
 
     modelp = sub.add_parser("models", help="inspect or set backbone LLM provider and default tier")
     modelp.add_argument("--config", default="helloagi.json")
@@ -1276,8 +1300,12 @@ def main():
             auth_doctor()
         elif args.auth_cmd == "login-openai":
             auth_login_openai(no_browser=args.no_browser, port=args.port)
+        elif args.auth_cmd == "import-codex":
+            auth_import_codex(getattr(args, "path", None))
         else:
-            parser.error("auth requires a subcommand: list, show, activate, deactivate, doctor, login-openai")
+            parser.error(
+                "auth requires a subcommand: list, show, activate, deactivate, doctor, login-openai, import-codex"
+            )
     elif args.cmd == "models":
         if args.models_cmd == "list":
             models_list(args.config)

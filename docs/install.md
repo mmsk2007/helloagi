@@ -253,7 +253,7 @@ source .env
 
 Use `helloagi models list` and `helloagi models set-provider|set-tier` to inspect or change backbone settings in `helloagi.json`. With `helloagi serve`, open **http://127.0.0.1:8787/dashboard** for a read-only operator page (health + journal tail); pass `?api_key=...` when the server requires auth.
 
-**OpenAI ChatGPT/Codex (browser OAuth, OpenClaw-style):** run **`helloagi auth login-openai`** from the project directory (use `--no-browser` on SSH and paste the redirect URL). See [providers.md](providers.md) for precedence vs `OPENAI_API_KEY` and legal notes.
+**OpenAI ChatGPT/Codex:** Prefer **`codex login`** (official Codex CLI) then **`helloagi auth import-codex`**. If you try **`helloagi auth login-openai`** and OpenAI shows **unknown_error**, use the import path instead — see [providers.md](providers.md).
 
 ### 4. Verify the installation
 

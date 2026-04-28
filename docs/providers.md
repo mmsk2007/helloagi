@@ -33,7 +33,18 @@ This document is the **provider matrix** for HelloAGI: who powers the main agent
 
    This opens `https://auth.openai.com/oauth/authorize` (or prints the URL with `--no-browser`), captures the redirect on `http://127.0.0.1:<port>/auth/callback`, and if localhost is unreachable (SSH, blocked port) lets you **paste the full redirect URL** from the browser. Tokens are stored in **`memory/openai_codex_oauth.json`** (password-equivalent; never commit). The runtime **refreshes** the access token using the saved refresh token when it is near expiry.
 
-   **Unofficial / community OAuth client:** HelloAGI defaults to the same public **client id** documented by the community [`openai-oauth`](https://github.com/EvanZhouDev/openai-oauth) project (`app_EMoamEEZ73f0CkXaXp7hrann`). Override with `HELLOAGI_OPENAI_OAUTH_CLIENT_ID` if you register your own OAuth client with OpenAI. You must comply with OpenAI’s terms and regional restrictions; failures at `/oauth/token` (e.g. unsupported region) are between you and OpenAI’s policy.
+   **If OpenAI shows `unknown_error` (or similar) on the login page:** OpenAI often rejects **unofficial** OAuth `client_id` + `redirect_uri` combinations. That is expected. Use the **official Codex CLI** once on the same machine, then import:
+
+   ```bash
+   codex login
+   helloagi auth import-codex
+   ```
+
+   Default import path is **`%USERPROFILE%\.codex\auth.json`** on Windows or **`~/.codex/auth.json`**, or **`$CODEX_HOME/auth.json`** when set. Override with `helloagi auth import-codex --path D:\path\to\auth.json`.
+
+   See OpenAI’s Codex auth docs: [Authentication](https://developers.openai.com/codex/auth) and [CI/CD auth file](https://developers.openai.com/codex/auth/ci-cd-auth).
+
+   **Unofficial browser flow:** HelloAGI’s `login-openai` defaults to the public **client id** documented by the community [`openai-oauth`](https://github.com/EvanZhouDev/openai-oauth) project (`app_EMoamEEZ73f0CkXaXp7hrann`). It may or may not work depending on OpenAI policy. Prefer **`codex login` + `import-codex`** for a supported path.
 
 4. **Ignore OAuth file** — set `HELLOAGI_OPENAI_OAUTH_DISABLE=1` to force API key / `.env` bearer only.
 

@@ -807,12 +807,6 @@ pytest tests/
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. New tools, channel adapters, policy packs, and honest benchmarks are all welcome.
 
-## Author
-
-Created by **Eng. Mohammed Mazyad Alkhaldi** (Saudi Arabia).
-
-> *"Whatever the mind can conceive and believe, it can achieve."* — Napoleon Hill
-
 ## License
 
 MIT.
