@@ -1,9 +1,7 @@
 <p align="center">
-  <img src="docs/assets/HelloAGI.png" alt="HelloAGI" width="880">
+  <img src="docs/assets/HelloAGI.png" alt="HelloAGI" width="650">
 </p>
-
 <h1 align="center">HelloAGI</h1>
-
 <p align="center">
   <strong>An open-source governed autonomy runtime.</strong><br>
   <em>Not another chatbot wrapper. A practical agent runtime that can think, act, learn, and grow — with deterministic safety gates that prompt injection cannot bypass.</em>
