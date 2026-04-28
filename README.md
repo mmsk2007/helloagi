@@ -15,10 +15,10 @@
     <img src="https://img.shields.io/github/v/release/mmsk2007/helloagi?label=release&logo=github" alt="GitHub release">
   </a>
   <a href="https://pypi.org/project/helloagi/">
-    <img src="https://img.shields.io/pypi/v/helloagi.svg" alt="PyPI version">
+    <img src="https://img.shields.io/pypi/v/helloagi?style=flat&logo=pypi&logoColor=white&label=PyPI" alt="PyPI version">
   </a>
   <a href="https://pypi.org/project/helloagi/">
-    <img src="https://img.shields.io/pypi/pyversions/helloagi.svg" alt="Python versions">
+    <img src="https://img.shields.io/pypi/pyversions/helloagi?style=flat&logo=python&logoColor=white&label=python" alt="Python versions">
   </a>
   <a href="#srg-deterministic-governance">
     <img src="https://img.shields.io/badge/Governance-SRG-purple.svg" alt="SRG Governance">
