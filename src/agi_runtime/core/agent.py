@@ -519,7 +519,11 @@ class HelloAGIAgent:
 
             # Both API keys and long-lived bearer tokens are passed as ``api_key``;
             # the HTTP client sends ``Authorization: Bearer <value>``.
-            self._openai_client = AsyncOpenAI(api_key=openai_credential.secret)
+            base = (os.environ.get("HELLOAGI_OPENAI_BASE_URL") or "").strip()
+            kwargs: Dict[str, Any] = {"api_key": openai_credential.secret}
+            if base:
+                kwargs["base_url"] = base
+            self._openai_client = AsyncOpenAI(**kwargs)
 
         if pref == "anthropic":
             self._llm_provider = "anthropic" if anthropic_ok else None

@@ -795,6 +795,17 @@ def auth_doctor():
     print(AuthProfileManager().doctor())
 
 
+def auth_login_openai(*, no_browser: bool = False, port: int | None = None) -> None:
+    """Interactive ChatGPT / Codex OAuth (browser + PKCE, paste-redirect fallback)."""
+    from agi_runtime.auth.openai_codex_oauth import run_browser_oauth_login
+
+    run_browser_oauth_login(open_browser=not no_browser, port=port)
+    print()
+    print("Next: pip install openai  (or pip install \"helloagi[openai]\")")
+    print("      helloagi models set-provider openai")
+    print("      helloagi health")
+
+
 def openclaw(prompt: str, config_path: str, policy_pack: str = "safe-default"):
     import anyio
     from agi_runtime.adapters.openclaw_bridge import run_openclaw_agent
@@ -1093,6 +1104,21 @@ def main():
     auth_deactivatep = auth_sub.add_parser("deactivate", help="deactivate an auth profile")
     auth_deactivatep.add_argument("name")
     auth_sub.add_parser("doctor", help="check auth profile readiness")
+    auth_oauth = auth_sub.add_parser(
+        "login-openai",
+        help="OpenAI ChatGPT/Codex OAuth in browser (PKCE); saves memory/openai_codex_oauth.json",
+    )
+    auth_oauth.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="print the authorize URL only (for remote machines); paste redirect when prompted",
+    )
+    auth_oauth.add_argument(
+        "--port",
+        type=int,
+        default=None,
+        help="localhost callback port (default 1455 or HELLOAGI_OPENAI_OAUTH_PORT)",
+    )
 
     modelp = sub.add_parser("models", help="inspect or set backbone LLM provider and default tier")
     modelp.add_argument("--config", default="helloagi.json")
@@ -1248,8 +1274,10 @@ def main():
             auth_deactivate(args.name)
         elif args.auth_cmd == "doctor":
             auth_doctor()
+        elif args.auth_cmd == "login-openai":
+            auth_login_openai(no_browser=args.no_browser, port=args.port)
         else:
-            parser.error("auth requires a subcommand: list, show, activate, deactivate, doctor")
+            parser.error("auth requires a subcommand: list, show, activate, deactivate, doctor, login-openai")
     elif args.cmd == "models":
         if args.models_cmd == "list":
             models_list(args.config)

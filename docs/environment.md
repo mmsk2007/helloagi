@@ -15,6 +15,11 @@ See also [providers.md](providers.md) for backbone vs tools-only credentials, Te
 
 - `HELLOAGI_LLM_PROVIDER` — `auto` \| `anthropic` \| `google` \| `openai`. Overrides `helloagi.json` `llm_provider` for this process.
 - `HELLOAGI_OPENAI_MODEL_SPEED`, `HELLOAGI_OPENAI_MODEL_BALANCED`, `HELLOAGI_OPENAI_MODEL_QUALITY` — optional OpenAI model id overrides when the active backbone is OpenAI.
+- `HELLOAGI_OPENAI_BASE_URL` — optional OpenAI-compatible API base URL (e.g. local Codex proxy); see [providers.md](providers.md).
+
+ChatGPT/Codex OAuth (see **`helloagi auth login-openai`** in [providers.md](providers.md)):
+
+- `HELLOAGI_OPENAI_OAUTH_CLIENT_ID`, `HELLOAGI_OPENAI_OAUTH_SCOPE`, `HELLOAGI_OPENAI_OAUTH_PORT`, `HELLOAGI_OPENAI_OAUTH_BIND`, `HELLOAGI_OPENAI_OAUTH_STORE`, `HELLOAGI_OPENAI_OAUTH_DISABLE`
 
 ## Channels
 

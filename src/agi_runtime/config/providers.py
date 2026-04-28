@@ -97,6 +97,29 @@ def env_names_for_provider(provider: str, auth_mode: str | None = None) -> list[
     return names
 
 
+def _try_openai_codex_oauth_credential() -> ProviderCredential | None:
+    """Use ``memory/openai_codex_oauth.json`` (browser OAuth) when not disabled."""
+    if os.environ.get("HELLOAGI_OPENAI_OAUTH_DISABLE", "").strip().lower() in ("1", "true", "yes"):
+        return None
+    try:
+        from agi_runtime.auth.openai_codex_oauth import effective_access_token, oauth_store_path
+
+        if not oauth_store_path().exists():
+            return None
+        tok = effective_access_token()
+        if not tok:
+            return None
+        return ProviderCredential(
+            provider="openai",
+            auth_mode="auth_token",
+            env_name="OPENAI_AUTH_TOKEN",
+            secret=tok,
+            source="openai_codex_oauth",
+        )
+    except Exception:
+        return None
+
+
 def resolve_provider_credential(
     provider: str,
     preferred_mode: str | None = None,
@@ -122,6 +145,12 @@ def resolve_provider_credential(
                     secret=secret,
                     source="env",
                 )
+
+    # OpenAI: ChatGPT/Codex OAuth store (auto-refresh) before auth profiles / .env.
+    if provider == "openai":
+        oauth_cred = _try_openai_codex_oauth_credential()
+        if oauth_cred and oauth_cred.configured:
+            return oauth_cred
 
     # Next: enabled auth profiles, which may reference custom env keys.
     profile_resolution = AuthProfileManager(path=auth_profiles_path, env_path=env_path).resolve(provider)
