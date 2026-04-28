@@ -14,9 +14,11 @@
   <a href="https://github.com/mmsk2007/helloagi/releases">
     <img src="https://img.shields.io/github/v/release/mmsk2007/helloagi?label=release&logo=github" alt="GitHub release">
   </a>
-  <img src="https://img.shields.io/badge/python-3.9%2B-blue.svg" alt="Python 3.9+">
   <a href="https://pypi.org/project/helloagi/">
-    <img src="https://img.shields.io/badge/PyPI-not%20published-lightgrey" alt="PyPI: not published yet (install from GitHub or scripts)">
+    <img src="https://img.shields.io/pypi/v/helloagi.svg" alt="PyPI version">
+  </a>
+  <a href="https://pypi.org/project/helloagi/">
+    <img src="https://img.shields.io/pypi/pyversions/helloagi.svg" alt="Python versions">
   </a>
   <a href="#srg-deterministic-governance">
     <img src="https://img.shields.io/badge/Governance-SRG-purple.svg" alt="SRG Governance">
@@ -76,7 +78,16 @@ On Windows PowerShell:
 irm https://raw.githubusercontent.com/mmsk2007/helloagi/main/scripts/install.ps1 | iex
 ```
 
-That's it. The installer bootstraps HelloAGI, initializes the runtime, and launches the onboarding wizard immediately so users land in a ready-to-go session without fighting PATH issues. If `pip` fails inside **Anaconda/Miniconda `base`** (for example `WinError 183` or broken `~package` folders in `site-packages`), use a **virtual environment** instead — see **Manual install** below.
+That's it for those **install scripts**: they bootstrap HelloAGI, initialize the runtime, and launch the onboarding wizard so users land in a ready-to-go session without fighting PATH issues.
+
+**From PyPI instead:** if you already use Python, you can install [from PyPI](https://pypi.org/project/helloagi/) like any other package (`pip` downloads wheels from the index), then run onboarding. Prefer a **venv** on Windows or inside conda `base` (see [docs/install.md](docs/install.md#option-0-virtual-environment-recommended-on-windows--conda)):
+
+```bash
+python -m pip install "helloagi[rich,telegram]"
+helloagi onboard
+```
+
+If `pip` fails inside **Anaconda/Miniconda `base`** (for example `WinError 183` or broken `~package` folders in `site-packages`), use a **virtual environment** instead — see **Manual install** below.
 
 Docs by goal:
 - Install and setup: [docs/install.md](docs/install.md)
