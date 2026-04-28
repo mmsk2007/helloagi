@@ -30,7 +30,7 @@ def run_health(config_path: str = "helloagi.json", onboard_path: str = "helloagi
         "journal_exists": Path(settings.journal_path).exists(),
         "anthropic_ready": bool(providers.get("anthropic", {}).get("llm_usable")),
         "google_ready": bool(providers.get("google", {}).get("llm_usable")),
-        "openai_ready": bool(providers.get("openai", {}).get("configured")),
+        "openai_ready": bool(providers.get("openai", {}).get("llm_usable")),
         "telegram_ready": telegram_status.available,
         "discord_ready": discord_status.available,
         "service_auth_ready": bool(resolve_env_value("HELLOAGI_API_KEY", env_path)),

@@ -235,10 +235,11 @@ class HelloAGIAgent:
         self._histories: Dict[str, List[dict]] = {}
         self._session_tool_calls_by_principal: Dict[str, List[dict]] = {}
 
-        # LLM backbones (Anthropic + optional Gemini) and active provider
+        # LLM backbones (Anthropic + optional Gemini + optional OpenAI) and active provider
         self._claude = None
         self._gemini_client = None
-        self._llm_provider: Optional[str] = None  # "anthropic" | "google" | None
+        self._openai_client = None
+        self._llm_provider: Optional[str] = None  # "anthropic" | "google" | "openai" | None
         self._configure_llm_backbone()
 
         # Callbacks (set by CLI/API layer)
@@ -466,21 +467,27 @@ class HelloAGIAgent:
         self._session_tool_calls_by_principal[self.current_principal()] = value
 
     def _configure_llm_backbone(self) -> None:
-        """Pick Anthropic vs Google from settings/env and available credentials."""
+        """Pick Anthropic vs Google vs OpenAI from settings/env and available credentials."""
         env_override = os.environ.get("HELLOAGI_LLM_PROVIDER")
         pref = (env_override or getattr(self.settings, "llm_provider", None) or "auto")
         pref = str(pref).strip().lower()
-        if pref not in ("auto", "anthropic", "google"):
+        if pref not in ("auto", "anthropic", "google", "openai"):
             pref = "auto"
 
         anthropic_credential = resolve_provider_credential("anthropic")
         google_credential = resolve_provider_credential("google")
+        openai_credential = resolve_provider_credential("openai")
         import importlib.util
 
         try:
             has_genai = importlib.util.find_spec("google.genai") is not None
         except ModuleNotFoundError:
             has_genai = False
+
+        try:
+            has_openai = importlib.util.find_spec("openai") is not None
+        except ModuleNotFoundError:
+            has_openai = False
 
         if pref == "auto":
             anthropic_ok = (
@@ -490,25 +497,43 @@ class HelloAGIAgent:
             google_ok = (
                 provider_credential_usable_for_llm_backbone("google", google_credential) and has_genai
             )
+            openai_ok = (
+                has_openai
+                and provider_credential_usable_for_llm_backbone("openai", openai_credential)
+            )
         else:
             anthropic_ok = _ANTHROPIC_AVAILABLE and anthropic_credential.configured
             google_ok = google_credential.configured and has_genai
+            openai_ok = (
+                has_openai
+                and provider_credential_usable_for_llm_backbone("openai", openai_credential)
+            )
 
         if anthropic_ok:
             self._claude = _anthropic_lib.Anthropic(api_key=anthropic_credential.secret)
         if google_ok:
             from google import genai
             self._gemini_client = genai.Client(api_key=google_credential.secret)
+        if openai_ok:
+            from openai import AsyncOpenAI
+
+            # Both API keys and long-lived bearer tokens are passed as ``api_key``;
+            # the HTTP client sends ``Authorization: Bearer <value>``.
+            self._openai_client = AsyncOpenAI(api_key=openai_credential.secret)
 
         if pref == "anthropic":
             self._llm_provider = "anthropic" if anthropic_ok else None
         elif pref == "google":
             self._llm_provider = "google" if google_ok else None
+        elif pref == "openai":
+            self._llm_provider = "openai" if openai_ok else None
         else:
             if anthropic_ok:
                 self._llm_provider = "anthropic"
             elif google_ok:
                 self._llm_provider = "google"
+            elif openai_ok:
+                self._llm_provider = "openai"
             else:
                 self._llm_provider = None
 
@@ -895,6 +920,8 @@ class HelloAGIAgent:
         """Spawn an isolated sub-agent to handle a delegated task."""
         if self._llm_provider == "google":
             return await self._handle_delegation_gemini(goal, context, toolset_filter, max_turns)
+        if self._llm_provider == "openai":
+            return await self._handle_delegation_openai(goal, context, toolset_filter, max_turns)
         if not self._claude:
             return "Cannot delegate: Anthropic backbone not configured (set keys for Claude or use HELLOAGI_LLM_PROVIDER=google for Gemini)."
 
@@ -1300,6 +1327,8 @@ class HelloAGIAgent:
         try:
             if self._llm_provider == "anthropic":
                 response = await self._think_async_claude(user_input, gov, tools, system_prompt, principal_id)
+            elif self._llm_provider == "openai":
+                response = await self._think_async_openai(user_input, gov, tools, system_prompt, principal_id)
             else:
                 response = await self._think_async_gemini(user_input, gov, tools, system_prompt, principal_id)
             if expert is not None:
@@ -1866,6 +1895,486 @@ class HelloAGIAgent:
             failure_reason="max_turns_reached" if not summary else "",
         )
 
+    async def _think_async_openai(
+        self, user_input: str, gov: GovernanceResult, tools: List[dict], system_prompt: str, principal_id: str
+    ) -> AgentResponse:
+        """OpenAI Chat Completions tool loop (mirrors Claude path, shared SRG/tool execution)."""
+        from agi_runtime.llm.openai_adapter import (
+            assistant_content_as_anthropic_shapes,
+            claude_history_to_openai_messages,
+            claude_tool_schemas_to_openai,
+            openai_chat_completion,
+            parse_openai_assistant_message,
+        )
+
+        total_tool_calls = 0
+        turns_used = 0
+        oai_tools = claude_tool_schemas_to_openai(tools)
+
+        if self.reliability_enabled:
+            self.loop_breaker.reset(principal_id)
+            self.recovery_manager.reset(principal_id)
+
+        cog_cfg = (
+            self.settings.cognitive_runtime
+            if isinstance(self.settings.cognitive_runtime, dict)
+            else {}
+        )
+        stall_cfg = cog_cfg.get("stall") if isinstance(cog_cfg, dict) else None
+        stall_enabled = bool((stall_cfg or {}).get("enabled", True))
+        stall_detector = stall_detector_from_config(cog_cfg)
+
+        for turn in range(self.max_turns):
+            turns_used = turn + 1
+
+            if self._think_soft_deadline is not None and time.time() >= self._think_soft_deadline:
+                msg = (
+                    "Stopped: reached the configured think-time limit "
+                    "(set `reliability.soft_timeout_sec` in helloagi.json; use 0 to disable)."
+                )
+                self.journal.write(
+                    "think_soft_timeout",
+                    {"turns": turns_used, "tool_calls": total_tool_calls, "provider": "openai"},
+                )
+                return AgentResponse(
+                    text=msg,
+                    decision=gov.decision,
+                    risk=gov.risk,
+                    tool_calls_made=total_tool_calls,
+                    turns_used=turns_used,
+                    success=False,
+                    failure_reason="soft_timeout",
+                )
+
+            if self.reliability_enabled:
+                signal = self.loop_breaker.check(principal_id)
+                if signal.detected:
+                    if signal.loop_type == "recovery-exhausted":
+                        self.journal.write("recovery_exhausted_loop_breaker", {"principal_id": principal_id})
+                        return AgentResponse(
+                            text=self.recovery_manager.exhausted_user_message(),
+                            decision=gov.decision,
+                            risk=gov.risk,
+                            tool_calls_made=total_tool_calls,
+                            turns_used=turns_used,
+                            success=False,
+                            failure_reason="recovery_exhausted",
+                        )
+                    action = self.recovery_manager.suggest(
+                        loop_type=signal.loop_type, session_id=principal_id
+                    )
+                    if action.exhausted:
+                        self.journal.write("recovery_exhausted", {})
+                        return AgentResponse(
+                            text=self.recovery_manager.exhausted_user_message(),
+                            decision=gov.decision, risk=gov.risk,
+                            tool_calls_made=total_tool_calls, turns_used=turns_used,
+                            success=False, failure_reason="recovery_exhausted",
+                        )
+                    self._history.append({"role": "user", "content": action.instruction})
+                    self.journal.write("loop_broken", {"strategy": action.strategy})
+
+            messages = claude_history_to_openai_messages(self._history, system_prompt=system_prompt)
+            model = self._select_model(user_input)
+            try:
+                resp = await openai_chat_completion(
+                    self._openai_client,
+                    model=model,
+                    messages=messages,
+                    tools=oai_tools or None,
+                    max_tokens=self.MAX_OUTPUT_TOKENS,
+                    on_stream=self.on_stream,
+                )
+                omsg = resp.choices[0].message
+                text, oa_tools = parse_openai_assistant_message(omsg)
+            except Exception as e:
+                error_msg = f"LLM call failed: {e}"
+                self.journal.write("llm_error", {"error": str(e), "turn": turn, "provider": "openai"})
+                return AgentResponse(
+                    text=error_msg, decision=gov.decision, risk=gov.risk,
+                    tool_calls_made=total_tool_calls, turns_used=turns_used,
+                    success=False, failure_reason=f"llm_error:{type(e).__name__}",
+                )
+
+            tool_calls = [
+                ToolCall(id=t["id"], name=t["name"], input=t.get("input") or {})
+                for t in oa_tools
+            ]
+
+            self._history.append(
+                {"role": "assistant", "content": assistant_content_as_anthropic_shapes(text, oa_tools)}
+            )
+
+            stall_detector.observe(
+                text_chars=len(text or ""),
+                tool_call_count=len(tool_calls),
+            )
+            self._emit_step_callback(turns_used, tool_calls)
+
+            if not tool_calls:
+                final_text = text or ""
+
+                if self.reliability_enabled:
+                    tools_used_names = [tc["tool"] for tc in self._session_tool_calls]
+                    comp_check = self.completion_verifier.verify(
+                        final_text, tool_calls_made=total_tool_calls, tools_used=tools_used_names
+                    )
+                    if comp_check.status == "phantom":
+                        self.journal.write("phantom_completion", {"reasons": comp_check.reasons})
+                        try:
+                            self.srg_adapter.logger.log_generic(
+                                gate="completion",
+                                decision="require_more_evidence",
+                                reasons=list(comp_check.reasons),
+                                principal_id=principal_id,
+                                action_summary="phantom_completion",
+                            )
+                        except Exception:
+                            pass
+                        self._history.append({"role": "user", "content": comp_check.suggestion})
+                        continue
+
+                    stop_check = self.stop_validator.validate(
+                        final_text, tool_calls_made=total_tool_calls,
+                        tools_used=tools_used_names, is_multi_step=(total_tool_calls > 1)
+                    )
+                    if stop_check.decision == "continue":
+                        self.journal.write("stop_validation_failed", {"reasons": stop_check.reasons})
+                        try:
+                            self.srg_adapter.logger.log_generic(
+                                gate="completion",
+                                decision="require_more_evidence",
+                                reasons=list(stop_check.reasons),
+                                principal_id=principal_id,
+                                action_summary="stop_validation_continue",
+                            )
+                        except Exception:
+                            pass
+                        self._history.append({"role": "user", "content": stop_check.disclaimer})
+                        continue
+                    elif stop_check.decision == "disclaim" and stop_check.disclaimer:
+                        final_text += stop_check.disclaimer
+
+                if gov.decision == "escalate":
+                    final_text += "\n\n⚠️ This request was flagged for human confirmation before high-risk actions."
+
+                self.ale.put(user_input, final_text)
+                self._auto_store_memory(user_input, final_text)
+                tools_used = [tc["tool"] for tc in self._session_tool_calls]
+                self.patterns.record_interaction(user_input, tools_used)
+
+                self.journal.write("response", {
+                    "decision": gov.decision,
+                    "risk": gov.risk,
+                    "turns": turns_used,
+                    "tool_calls": total_tool_calls,
+                    "provider": "openai",
+                })
+                self.identity.evolve(final_text)
+
+                return AgentResponse(
+                    text=final_text,
+                    decision=gov.decision,
+                    risk=gov.risk,
+                    tool_calls_made=total_tool_calls,
+                    turns_used=turns_used,
+                )
+
+            tool_results = []
+            for tc in tool_calls:
+                total_tool_calls += 1
+                self.growth.record_tool_call()
+
+                if not self._allowed_tool(tc.name):
+                    result_content = f"Tool '{tc.name}' is not available under the active policy pack '{self.policy_pack.name}'."
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": result_content,
+                    })
+                    self.journal.write("tool_blocked_by_policy_pack", {
+                        "tool": tc.name,
+                        "policy_pack": self.policy_pack.name,
+                    })
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
+                if tc.name == "delegate_task":
+                    if self.on_tool_start:
+                        self.on_tool_start(tc.name, tc.input, "allow")
+                    delegation_result = await self._handle_delegation_openai(
+                        goal=tc.input.get("goal", ""),
+                        context=tc.input.get("context", ""),
+                        toolset_filter=tc.input.get("toolset", ""),
+                        max_turns=tc.input.get("max_turns", 15),
+                    )
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": delegation_result,
+                    })
+                    self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": True})
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, True, delegation_result[:200])
+                    continue
+
+                tool_def = self.tool_registry.get(tc.name)
+                tool_risk = tool_def.risk.value if tool_def else "medium"
+                tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
+
+                if self.on_tool_start:
+                    self.on_tool_start(tc.name, tc.input, tool_gov.decision)
+
+                if tool_gov.decision == "deny":
+                    result_content = f"🛑 BLOCKED by SRG governance: {'; '.join(tool_gov.reasons)}\n{tool_gov.safe_alternative or ''}"
+                    self.journal.write("tool_denied", {
+                        "tool": tc.name,
+                        "risk": tool_gov.risk,
+                        "reasons": tool_gov.reasons,
+                    })
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": result_content,
+                    })
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
+                if tool_gov.decision == "escalate":
+                    approved = await self._request_user_approval(tc, tool_gov)
+                    if not approved:
+                        result_content = "User denied this action."
+                        self.journal.write("tool_user_denied", {"tool": tc.name})
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": tc.id,
+                            "content": result_content,
+                        })
+                        if self.on_tool_end:
+                            self.on_tool_end(tc.name, False, result_content)
+                        continue
+
+                if not self.circuit_breaker.can_execute(tc.name):
+                    cb_status = self.circuit_breaker.get_status(tc.name)
+                    result_content = (
+                        f"⚡ Circuit breaker OPEN for '{tc.name}' — "
+                        f"{cb_status['failures']} consecutive failures. "
+                        f"Will retry after cooldown."
+                    )
+                    self.journal.write("circuit_breaker_open", {
+                        "tool": tc.name,
+                        "failures": cb_status["failures"],
+                        "short_circuited": cb_status["short_circuited"],
+                    })
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": result_content,
+                    })
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
+                result = await self._execute_tool(tc.name, tc.input)
+
+                if result.ok:
+                    self.circuit_breaker.record_success(tc.name)
+                    self.supervisor.record_tool_success(tc.name)
+                else:
+                    self.circuit_breaker.record_failure(tc.name)
+                    self.supervisor.record_tool_failure(tc.name, result.to_content()[:200])
+
+                self.journal.write("tool_exec", {
+                    "tool": tc.name,
+                    "input": {k: str(v)[:200] for k, v in tc.input.items()},
+                    "ok": result.ok,
+                    "output_preview": result.to_content()[:300],
+                    "governance": tool_gov.decision,
+                    "risk": tool_gov.risk,
+                    "provider": "openai",
+                })
+
+                self._session_tool_calls.append({
+                    "tool": tc.name,
+                    "input": tc.input,
+                    "ok": result.ok,
+                })
+
+                if self.reliability_enabled:
+                    self.loop_breaker.record_call(
+                        tool=tc.name,
+                        args=tc.input,
+                        error=result.to_content()[:200] if not result.ok else "",
+                        response="",
+                        session_id=principal_id
+                    )
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc.id,
+                    "content": result.to_content(),
+                })
+
+                if self.on_tool_end:
+                    self.on_tool_end(tc.name, result.ok, result.to_content()[:200])
+
+            self._history.append({"role": "user", "content": tool_results})
+
+            if stall_enabled:
+                stall_signal = stall_detector.check()
+                if stall_signal.detected:
+                    self.journal.write("system.stall_detected", {
+                        "tool_calls": stall_signal.total_tool_calls,
+                        "silent_turns": stall_signal.consecutive_silent_turns,
+                        "turn": turns_used,
+                        "reason": stall_signal.reason,
+                        "provider": "openai",
+                    })
+                    self._history.append({
+                        "role": "user",
+                        "content": build_stall_reminder(stall_signal),
+                    })
+                    stall_detector.acknowledge()
+
+            if self.compressor.needs_compression(self._history):
+                self._history = await self.compressor.compress(self._history)
+                self.journal.write("context_compressed", {"new_length": len(self._history)})
+
+        self.journal.write("max_turns_reached", {"tool_calls": total_tool_calls, "max_turns": self.max_turns, "provider": "openai"})
+        backup = self._message_after_max_turns(user_input, total_tool_calls, turns_used)
+        summary = await self._synthesize_openai_text_only(user_input, system_prompt)
+        if summary:
+            final_text = (
+                f"{summary}\n\n"
+                f"(Note: this answer was synthesized after reaching the {self.max_turns}-turn tool budget.)"
+            )
+        else:
+            final_text = (
+                f"{backup}\n\n"
+                f"I could not generate a final summary. Try a narrower question, or rephrase and ask again."
+            )
+        return AgentResponse(
+            text=final_text, decision=gov.decision, risk=gov.risk,
+            tool_calls_made=total_tool_calls, turns_used=turns_used,
+            success=bool(summary),
+            failure_reason="max_turns_reached" if not summary else "",
+        )
+
+    async def _synthesize_openai_text_only(self, user_input: str, system_prompt: str) -> str:
+        """One non-tool OpenAI completion when the main loop hit max turns."""
+        from agi_runtime.llm.openai_adapter import claude_history_to_openai_messages, openai_chat_completion
+        from agi_runtime.models.router import model_id_for_tier
+
+        if not self._openai_client:
+            return ""
+        messages = claude_history_to_openai_messages(self._history, system_prompt=system_prompt)
+        messages.append({"role": "user", "content": self._synthesis_nudge_user_content(user_input)})
+        model = model_id_for_tier("openai", getattr(self.settings, "default_model_tier", "balanced") or "balanced")
+        try:
+            resp = await openai_chat_completion(
+                self._openai_client,
+                model=model,
+                messages=messages,
+                tools=None,
+                max_tokens=min(8192, self.MAX_OUTPUT_TOKENS),
+            )
+            txt = (resp.choices[0].message.content or "").strip()
+        except Exception as e:
+            self.journal.write("synthesis_after_max_turns", {"ok": False, "provider": "openai", "error": str(e)[:500]})
+            return ""
+        self.journal.write("synthesis_after_max_turns", {"ok": bool(txt), "provider": "openai", "chars": len(txt)})
+        return txt
+
+    async def _handle_delegation_openai(
+        self, goal: str, context: str, toolset_filter: str, max_turns: int
+    ) -> str:
+        """OpenAI-only sub-loop for ``delegate_task``."""
+        from agi_runtime.llm.openai_adapter import (
+            assistant_content_as_anthropic_shapes,
+            claude_history_to_openai_messages,
+            claude_tool_schemas_to_openai,
+            openai_chat_completion,
+            parse_openai_assistant_message,
+        )
+        from agi_runtime.models.router import model_id_for_tier
+
+        if not self._openai_client:
+            return "Cannot delegate: OpenAI backbone not configured."
+
+        if toolset_filter:
+            allowed = [t.strip() for t in toolset_filter.split(",")]
+            tools = [s for s in self._get_tool_schemas() if s["name"] in allowed]
+        else:
+            blocked = {"delegate_task", "skill_create", "skill_invoke"}
+            tools = [s for s in self._get_tool_schemas() if s["name"] not in blocked]
+
+        sub_system = self._build_sub_agent_system_prompt(goal=goal, context=context, max_turns=max_turns)
+        seed = f"Task: {goal}\n\nContext: {context}"
+        hist: List[dict] = [{"role": "user", "content": seed}]
+        oai_tools = claude_tool_schemas_to_openai(tools)
+        model = model_id_for_tier("openai", "speed")
+        sub_max = min(max_turns, 15)
+
+        for turn in range(sub_max):
+            messages = claude_history_to_openai_messages(hist, system_prompt=sub_system)
+            try:
+                resp = await openai_chat_completion(
+                    self._openai_client,
+                    model=model,
+                    messages=messages,
+                    tools=oai_tools or None,
+                    max_tokens=4096,
+                )
+                omsg = resp.choices[0].message
+                text, oa_tools = parse_openai_assistant_message(omsg)
+            except Exception as e:
+                return f"Sub-agent LLM error: {e}"
+
+            hist.append({"role": "assistant", "content": assistant_content_as_anthropic_shapes(text, oa_tools)})
+            tool_calls = [
+                ToolCall(id=t["id"], name=t["name"], input=t.get("input") or {})
+                for t in oa_tools
+            ]
+            if not tool_calls:
+                final = (text or "").strip()
+                self.journal.write("delegation_complete", {"goal": goal[:200], "turns": turn + 1, "provider": "openai"})
+                return final
+
+            tool_results = []
+            for tc in tool_calls:
+                tool_def = self.tool_registry.get(tc.name)
+                tool_risk = tool_def.risk.value if tool_def else "medium"
+                tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
+                if tool_gov.decision == "deny":
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": f"BLOCKED by SRG: {'; '.join(tool_gov.reasons)}",
+                    })
+                    continue
+                if not self.circuit_breaker.can_execute(tc.name):
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": f"Circuit breaker open for '{tc.name}' — skipped.",
+                    })
+                    continue
+                result = await self._execute_tool(tc.name, tc.input)
+                if result.ok:
+                    self.circuit_breaker.record_success(tc.name)
+                else:
+                    self.circuit_breaker.record_failure(tc.name)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc.id,
+                    "content": result.to_content()[:5000],
+                })
+            hist.append({"role": "user", "content": tool_results})
+
+        return f"Sub-agent completed {sub_max} turns on: {goal}"
+
     async def _gemini_generate_with_resilience(
         self,
         *,
@@ -2384,18 +2893,13 @@ class HelloAGIAgent:
         return response in ("y", "yes", "approve", "ok")
 
     def _select_model(self, user_input: str) -> str:
-        """Select the appropriate Claude model based on task complexity.
-
-        When an enforced System 1 override is active for this think(), force
-        Haiku regardless of keyword heuristics — that's the whole point of
-        Expert Mode.
-        """
+        """Select backbone model id for Anthropic or OpenAI (tier heuristics)."""
         if self._active_expert_overrides is not None:
             return self._active_expert_overrides.model_id
-        from agi_runtime.models.router import ModelRouter
-        router = ModelRouter()
-        decision = router.route(user_input)
-        return decision.model
+        from agi_runtime.models.router import route_for_provider
+
+        provider = self._llm_provider or "anthropic"
+        return route_for_provider(str(provider), user_input).model
 
     def _ensure_cognitive_council(self):
         """Build the Agent Council on first use.
@@ -2500,14 +3004,18 @@ class HelloAGIAgent:
         tools_list = ", ".join(t.name for t in allowed_tools)
         anthropic_ready = resolve_provider_credential("anthropic").configured
         google_ready = resolve_provider_credential("google").configured
+        openai_ready = resolve_provider_credential("openai").configured
         text = (
             f"[{self.identity.state.name} | {self.identity.state.character}]\n"
             f"I received your request but no LLM backbone is active.\n"
             f"- Set ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN for Claude (default when present), or\n"
             f"- Set GOOGLE_API_KEY or GOOGLE_AUTH_TOKEN and run `pip install google-genai` to use Gemini "
-            f"(use HELLOAGI_LLM_PROVIDER=google when both keys exist).\n\n"
+            f"(use HELLOAGI_LLM_PROVIDER=google when both keys exist), or\n"
+            f"- Set OPENAI_API_KEY or OPENAI_AUTH_TOKEN and run `pip install openai` for OpenAI "
+            f"(use HELLOAGI_LLM_PROVIDER=openai).\n\n"
             f"Current: GOOGLE={'set' if google_ready else 'unset'}, "
-            f"ANTHROPIC={'set' if anthropic_ready else 'unset'}.\n\n"
+            f"ANTHROPIC={'set' if anthropic_ready else 'unset'}, "
+            f"OPENAI={'set' if openai_ready else 'unset'}.\n\n"
             f"Without an LLM, tool execution is still available.\n"
             f"Available tools ({len(allowed_tools)}): {tools_list}\n"
         )

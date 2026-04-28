@@ -857,6 +857,9 @@ def _serve_with_channels(args):
 
     _setup_serve_logging(verbose=getattr(args, "verbose", 0), quiet=getattr(args, "quiet", False))
 
+    import os
+
+    os.environ["HELLOAGI_CONFIG_PATH"] = args.config
     settings = load_settings(args.config)
     agent = HelloAGIAgent(settings, policy_pack=args.policy)
 
@@ -910,6 +913,40 @@ def _serve_with_channels(args):
         print("\nShutting down...")
     finally:
         srv.shutdown()
+
+
+def models_list(config_path: str) -> None:
+    from agi_runtime.config.settings import load_settings
+    from agi_runtime.models.router import model_id_for_tier, route_for_provider
+
+    settings = load_settings(config_path)
+    print(f"Config: {config_path}")
+    print(f"  llm_provider: {settings.llm_provider}")
+    print(f"  default_model_tier: {settings.default_model_tier}")
+    for prov in ("anthropic", "openai"):
+        d = route_for_provider(prov, "default routing sample prompt for model selection")
+        print(f"  {prov} sample ({d.tier}/{d.reason}): {d.model}")
+    print(f"  anthropic fixed tier {settings.default_model_tier}: {model_id_for_tier('anthropic', settings.default_model_tier)}")
+    print(f"  openai fixed tier {settings.default_model_tier}: {model_id_for_tier('openai', settings.default_model_tier)}")
+    print("  google: tier resolved per-turn via agi_runtime.models.gemini_router")
+
+
+def models_set_provider(config_path: str, provider: str) -> None:
+    from agi_runtime.config.settings import load_settings, save_settings
+
+    settings = load_settings(config_path)
+    settings.llm_provider = provider
+    save_settings(settings, config_path)
+    print(f"Saved llm_provider={provider!r} to {config_path}")
+
+
+def models_set_tier(config_path: str, tier: str) -> None:
+    from agi_runtime.config.settings import load_settings, save_settings
+
+    settings = load_settings(config_path)
+    settings.default_model_tier = tier
+    save_settings(settings, config_path)
+    print(f"Saved default_model_tier={tier!r} to {config_path}")
 
 
 def main():
@@ -1057,6 +1094,15 @@ def main():
     auth_deactivatep.add_argument("name")
     auth_sub.add_parser("doctor", help="check auth profile readiness")
 
+    modelp = sub.add_parser("models", help="inspect or set backbone LLM provider and default tier")
+    modelp.add_argument("--config", default="helloagi.json")
+    model_sub = modelp.add_subparsers(dest="models_cmd")
+    model_sub.add_parser("list", help="show llm_provider, default_model_tier, and sample resolved models")
+    msp = model_sub.add_parser("set-provider", help="set helloagi.json llm_provider (auto|anthropic|google|openai)")
+    msp.add_argument("provider", choices=["auto", "anthropic", "google", "openai"])
+    mst = model_sub.add_parser("set-tier", help="set helloagi.json default_model_tier (speed|balanced|quality)")
+    mst.add_argument("tier", choices=["speed", "balanced", "quality"])
+
     sub.add_parser("orchestrate-demo", help="run orchestration DAG demo")
     tri = sub.add_parser("tri-loop", help="run planner/executor/verifier loop")
     tri.add_argument("--goal", required=True)
@@ -1068,7 +1114,11 @@ def main():
     onboard.add_argument("--path", default="helloagi.onboard.json")
     onboard.add_argument("--non-interactive", action="store_true", help="configure onboarding from flags and env without prompts")
     onboard.add_argument("--runtime-mode", choices=["cli", "hybrid", "service"], default=None)
-    onboard.add_argument("--provider", choices=["template", "anthropic", "google"], default=None)
+    onboard.add_argument(
+        "--provider",
+        choices=["template", "anthropic", "google", "openai"],
+        default=None,
+    )
     onboard.add_argument("--auth-mode", choices=["api_key", "auth_token"], default=None)
     onboard.add_argument("--service-auth-token", default=None)
     onboard.add_argument("--enable-extension", action="append", default=[], help="enable an extension during onboarding (repeatable)")
@@ -1200,6 +1250,15 @@ def main():
             auth_doctor()
         else:
             parser.error("auth requires a subcommand: list, show, activate, deactivate, doctor")
+    elif args.cmd == "models":
+        if args.models_cmd == "list":
+            models_list(args.config)
+        elif args.models_cmd == "set-provider":
+            models_set_provider(args.config, args.provider)
+        elif args.models_cmd == "set-tier":
+            models_set_tier(args.config, args.tier)
+        else:
+            parser.error("models requires a subcommand: list, set-provider, set-tier")
     elif args.cmd == "orchestrate-demo":
         orchestrate_demo()
     elif args.cmd == "tri-loop":

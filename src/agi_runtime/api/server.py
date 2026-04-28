@@ -8,6 +8,8 @@ Endpoints:
   GET  /identity    — Agent identity and principles
   GET  /sessions    — Session info
   GET  /governance  — SRG governance stats
+  GET  /dashboard   — Local operator dashboard (HTML)
+  GET  /journal     — Recent JSONL journal events (``?tail=N``)
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import os
 import time
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
 from agi_runtime.channels.voice_presence import voice_presence_store
@@ -63,6 +66,15 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_html(self, code: int, html: str):
+        body = html.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
     def _send_cors_headers(self):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -97,6 +109,10 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
             return self._handle_identity()
         elif path == "/governance":
             return self._handle_governance()
+        elif path == "/dashboard":
+            return self._handle_dashboard_page()
+        elif path == "/journal":
+            return self._handle_journal()
         else:
             return self._send_json(404, {"error": "not_found"})
 
@@ -136,7 +152,12 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
             "policy_pack": self.agent.policy_pack.name,
             "tools": len(tools),
             "skills": len(self.agent.skills.list_skills()),
-            "llm_configured": self.agent._claude is not None,
+            "llm_configured": (
+                self.agent._claude is not None
+                or self.agent._gemini_client is not None
+                or getattr(self.agent, "_openai_client", None) is not None
+            ),
+            "llm_provider": getattr(self.agent, "_llm_provider", None),
             "srg_active": True,
             "auth_required": self.auth_required,
             "auth_mode": "token" if self.auth_required else "none",
@@ -248,6 +269,35 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
             "exfil_patterns_count": len(policy.exfil_patterns),
         })
 
+    def _handle_dashboard_page(self):
+        """Minimal local operator dashboard (read-only)."""
+        self._send_html(200, _dashboard_html())
+
+    def _handle_journal(self):
+        """Return the last N lines of the JSONL journal as JSON (read-only)."""
+        query = parse_qs(urlparse(self.path).query)
+        raw_tail = (query.get("tail") or ["100"])[0]
+        try:
+            tail = max(1, min(500, int(raw_tail, 10)))
+        except ValueError:
+            tail = 100
+        path = Path(getattr(self.agent.settings, "journal_path", "memory/events.jsonl"))
+        if not path.is_file():
+            return self._send_json(200, {"lines": [], "path": str(path), "tail": tail})
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            return self._send_json(500, {"error": str(e)})
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        slice_lines = lines[-tail:]
+        parsed = []
+        for ln in slice_lines:
+            try:
+                parsed.append(json.loads(ln))
+            except Exception:
+                parsed.append({"raw": ln[:2000]})
+        return self._send_json(200, {"path": str(path), "tail": tail, "events": parsed})
+
     def _handle_chat(self):
         """Non-streaming chat endpoint."""
         data = self._read_body()
@@ -355,6 +405,69 @@ class ThreadedHTTPServer(HTTPServer):
             self.shutdown_request(request)
 
 
+def _dashboard_html() -> str:
+    """Single-page operator view; uses same-origin fetches to /health and /journal."""
+    return """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HelloAGI Dashboard</title>
+  <style>
+    :root { --bg:#0f172a; --card:#1e293b; --text:#e2e8f0; --muted:#94a3b8; --accent:#38bdf8; }
+    body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+    header { padding:1rem 1.25rem; border-bottom:1px solid #334155; }
+    h1 { margin:0; font-size:1.1rem; font-weight:600; }
+    main { padding:1rem; display:grid; gap:1rem; max-width:960px; margin:0 auto; }
+    .card { background:var(--card); border-radius:8px; padding:1rem; border:1px solid #334155; }
+    pre { white-space:pre-wrap; word-break:break-word; font-size:12px; color:var(--muted); max-height:420px; overflow:auto; }
+    a { color:var(--accent); }
+    .row { display:flex; flex-wrap:wrap; gap:0.5rem; font-size:13px; color:var(--muted); }
+    button { background:#0ea5e9; color:#0f172a; border:0; border-radius:6px; padding:0.35rem 0.75rem; font-weight:600; cursor:pointer; }
+  </style>
+</head>
+<body>
+  <header><h1>HelloAGI — local dashboard</h1></header>
+  <main>
+    <div class="card">
+      <div class="row"><span id="status">Loading…</span><button type="button" id="refresh">Refresh</button></div>
+      <p style="font-size:13px;color:var(--muted);margin:0.5rem 0 0;">
+        Read-only. Secured like other endpoints when <code>HELLOAGI_API_KEY</code> or <code>--require-auth</code> is set — paste the key in the box and click Refresh.
+      </p>
+      <label style="font-size:12px;color:var(--muted);display:block;margin-top:0.5rem;">API key (optional)
+        <input id="apikey" type="password" style="width:100%;max-width:420px;margin-top:0.25rem;padding:0.35rem;border-radius:4px;border:1px solid #475569;background:#0f172a;color:var(--text);" placeholder="HELLOAGI_API_KEY if required" />
+      </label>
+    </div>
+    <div class="card"><h2 style="margin:0 0 0.5rem;font-size:0.95rem;">Health</h2><pre id="health"></pre></div>
+    <div class="card"><h2 style="margin:0 0 0.5rem;font-size:0.95rem;">Journal tail</h2><pre id="journal"></pre></div>
+    <div class="card" style="font-size:13px;">
+      JSON API: <a href="/health">/health</a> · <a href="/journal?tail=80">/journal?tail=80</a> · <a href="/tools">/tools</a>
+    </div>
+  </main>
+  <script>
+    async function loadAll() {
+      const k = document.getElementById('apikey').value.trim();
+      const headers = {};
+      if (k) { headers['Authorization'] = 'Bearer ' + k; }
+      const qs = k ? ('?api_key=' + encodeURIComponent(k)) : '';
+      const status = document.getElementById('status');
+      try {
+        const h = await fetch('/health' + qs, { headers });
+        document.getElementById('health').textContent = JSON.stringify(await h.json(), null, 2);
+        const j = await fetch('/journal?tail=80' + (k ? '&api_key=' + encodeURIComponent(k) : ''), { headers });
+        document.getElementById('journal').textContent = JSON.stringify(await j.json(), null, 2);
+        status.textContent = h.ok && j.ok ? 'OK' : ('HTTP ' + h.status + ' / ' + j.status);
+      } catch (e) {
+        status.textContent = 'Error: ' + e;
+      }
+    }
+    document.getElementById('refresh').addEventListener('click', loadAll);
+    loadAll();
+  </script>
+</body>
+</html>"""
+
+
 def run_server(
     host: str = "127.0.0.1",
     port: int = 8787,
@@ -363,6 +476,9 @@ def run_server(
     require_auth: bool = False,
 ):
     """Start the HelloAGI API server."""
+    import os
+
+    os.environ["HELLOAGI_CONFIG_PATH"] = config_path
     settings = load_settings(config_path)
     agent = HelloAGIAgent(settings, policy_pack=policy_pack)
     api_key = resolve_env_value("HELLOAGI_API_KEY")
@@ -378,7 +494,8 @@ def run_server(
 
     tools_count = len(agent._list_allowed_tools())
     skills_count = len(agent.skills.list_skills())
-    llm_status = "connected" if agent._claude else "not configured"
+    llm_ok = agent._claude or agent._gemini_client or getattr(agent, "_openai_client", None)
+    llm_status = "connected" if llm_ok else "not configured"
 
     print(f"🧠 HelloAGI API v0.5.0")
     print(f"   Agent: {agent.identity.state.name} ({agent.identity.state.character})")
@@ -397,6 +514,8 @@ def run_server(
     print(f"     GET  /skills       — Learned skills")
     print(f"     GET  /identity     — Agent identity")
     print(f"     GET  /governance   — SRG config")
+    print(f"     GET  /dashboard    — Local operator dashboard (HTML)")
+    print(f"     GET  /journal      — Recent journal events (?tail=N)")
     print()
 
     try:

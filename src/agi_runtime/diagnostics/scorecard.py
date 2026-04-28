@@ -117,11 +117,15 @@ def _check_provider_readiness(onboard: dict | None, *, env_path: str = ".env", a
         runtime_backbone = "anthropic-ready"
     elif "google" in env_llm_usable:
         runtime_backbone = "google-ready"
+    elif "openai" in env_llm_usable:
+        runtime_backbone = "openai-ready"
     elif active_provider == "google" and "google" in env_ready:
         runtime_backbone = "google-ready"
+    elif active_provider == "openai" and "openai" in env_ready:
+        runtime_backbone = "openai-ready"
     elif explicit_template:
         runtime_backbone = "template-only"
-    elif active_provider in {"anthropic", "google"}:
+    elif active_provider in {"anthropic", "google", "openai"}:
         runtime_backbone = f"{active_provider}-missing"
     else:
         runtime_backbone = "anthropic-missing"

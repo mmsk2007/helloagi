@@ -22,7 +22,7 @@ PROVIDER_SECRET_ENV: dict[str, dict[str, list[str]]] = {
     },
 }
 
-RUNTIME_PROVIDERS = ("anthropic", "google")
+RUNTIME_PROVIDERS = ("anthropic", "google", "openai")
 
 # Values that look like real keys but are docs/tests — ignored for automatic LLM selection.
 _ANTHROPIC_API_KEY_DENYLIST = frozenset(

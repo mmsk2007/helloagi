@@ -4,7 +4,7 @@ Uses the Telegram Bot API via python-telegram-bot library.
 Supports:
   - Text messages → agent.think()
   - SRG escalation via inline keyboard approve/deny
-  - /start, /tools, /skills, /identity, /new commands
+  - /start, /tools, /skills, /identity, /new, /provider, /model (admin-only) commands
   - Per-user sessions with history
   - Typing indicator during agent thinking
   - Live tool progress on one preview message (on by default; HELLOAGI_TELEGRAM_LIVE=0 to disable)
@@ -66,6 +66,39 @@ def _load_telegram_token() -> str:
     """Load Telegram token from env, falling back to local .env."""
     load_local_env()
     return os.environ.get("TELEGRAM_BOT_TOKEN", "")
+
+
+def _telegram_admin_ids() -> set[int]:
+    """Numeric Telegram user IDs allowed for /provider and /model (``HELLOAGI_TELEGRAM_ADMIN_IDS``)."""
+    raw = os.environ.get("HELLOAGI_TELEGRAM_ADMIN_IDS", "").strip()
+    if not raw:
+        return set()
+    out: set[int] = set()
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            out.add(int(part, 10))
+        except ValueError:
+            continue
+    return out
+
+
+def _is_telegram_admin(user) -> bool:
+    ids = _telegram_admin_ids()
+    if not ids or user is None:
+        return False
+    try:
+        return int(user.id) in ids
+    except Exception:
+        return False
+
+
+def _settings_config_path() -> str:
+    """Path to helloagi.json (set by ``helloagi serve`` as HELLOAGI_CONFIG_PATH)."""
+    p = (os.environ.get("HELLOAGI_CONFIG_PATH") or "").strip()
+    return p if p else "helloagi.json"
 
 
 def _markdownish_to_html(text: str) -> str:
@@ -168,6 +201,8 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("identity", self._cmd_identity))
         self._app.add_handler(CommandHandler("new", self._cmd_new))
         self._app.add_handler(CommandHandler("help", self._cmd_help))
+        self._app.add_handler(CommandHandler("provider", self._cmd_provider))
+        self._app.add_handler(CommandHandler("model", self._cmd_model))
         self._app.add_handler(CommandHandler("remind", self._cmd_remind))
         self._app.add_handler(CommandHandler("reminders", self._cmd_reminders))
         self._app.add_handler(CommandHandler("reminder_cancel", self._cmd_reminder_cancel))
@@ -634,6 +669,7 @@ class TelegramChannel(BaseChannel):
             f"{char}\n\n"
             f"{greeting} I have {tools_count} tools, governed by SRG safety.\n\n"
             f"Core: /tools /skills /identity /new /help\n"
+            f"Admins: /provider /model (see HELLOAGI_TELEGRAM_ADMIN_IDS)\n"
             f"Reminders: /remind <schedule> | <message> /reminders\n"
             f"            /reminder_cancel|pause|resume|run_now <id>\n\n"
             f"Just send me a message and I'll get to work.",
@@ -763,7 +799,119 @@ class TelegramChannel(BaseChannel):
             "- /remind tomorrow 9am | standup prep\n"
             "- /remind cron:0 9 * * * | daily planning\n"
             "- /reminders, /reminder_cancel <id>, /reminder_pause <id>, /reminder_resume <id>\n"
-            "- /reminder_run_now <id>",
+            "- /reminder_run_now <id>\n\n"
+            "Admin (HELLOAGI_TELEGRAM_ADMIN_IDS): /provider, /model — see docs/providers.md",
+        )
+
+    async def _cmd_provider(self, update, context):
+        user = update.effective_user
+        if not _is_telegram_admin(user):
+            await update.message.reply_text(
+                "⛔ /provider is admin-only. Set HELLOAGI_TELEGRAM_ADMIN_IDS to your numeric Telegram "
+                "user id (comma-separated for a team), restart the bot, and try again."
+            )
+            return
+        from agi_runtime.config.settings import load_settings, save_settings
+
+        cfg_path = _settings_config_path()
+        settings = load_settings(cfg_path)
+        raw_args = [a.strip().lower() for a in (context.args or []) if str(a).strip()]
+        if not raw_args:
+            await update.message.reply_text(
+                f"Backbone: llm_provider={settings.llm_provider!r}, "
+                f"default_model_tier={settings.default_model_tier!r}\n"
+                f"Config file: {cfg_path}\n\n"
+                "Usage: /provider auto|anthropic|google|openai"
+            )
+            return
+        choice = raw_args[0]
+        valid = {"auto", "anthropic", "google", "openai"}
+        if choice not in valid:
+            await update.message.reply_text(
+                f"Unknown value {choice!r}. Use one of: {', '.join(sorted(valid))}"
+            )
+            return
+        prev = settings.llm_provider
+        settings.llm_provider = choice
+        save_settings(settings, cfg_path)
+        self.agent.settings.llm_provider = choice
+        self.agent._configure_llm_backbone()
+        admin_id = None
+        try:
+            admin_id = int(user.id) if user else None
+        except Exception:
+            admin_id = None
+        try:
+            self.agent.journal.write(
+                "telegram.admin_config",
+                {
+                    "action": "set_llm_provider",
+                    "from": prev,
+                    "to": choice,
+                    "admin_user_id": admin_id,
+                    "config_path": cfg_path,
+                },
+            )
+        except Exception:
+            pass
+        await update.message.reply_text(
+            f"✅ llm_provider set to {choice!r} (was {prev!r}). Backbone reconfigured."
+        )
+
+    async def _cmd_model(self, update, context):
+        user = update.effective_user
+        if not _is_telegram_admin(user):
+            await update.message.reply_text(
+                "⛔ /model is admin-only. Set HELLOAGI_TELEGRAM_ADMIN_IDS to your numeric Telegram "
+                "user id (comma-separated for a team), restart the bot, and try again."
+            )
+            return
+        from agi_runtime.config.settings import load_settings, save_settings
+        from agi_runtime.models.router import model_id_for_tier
+
+        cfg_path = _settings_config_path()
+        settings = load_settings(cfg_path)
+        raw_args = [a.strip().lower() for a in (context.args or []) if str(a).strip()]
+        if not raw_args:
+            t = settings.default_model_tier
+            lines = [
+                f"default_model_tier: {t!r}",
+                f"  anthropic @ {t}: {model_id_for_tier('anthropic', t)}",
+                f"  openai @ {t}: {model_id_for_tier('openai', t)}",
+                "  google: tier resolved per-turn (gemini_router)",
+                "",
+                "Usage: /model speed|balanced|quality",
+            ]
+            await update.message.reply_text("\n".join(lines))
+            return
+        tier = raw_args[0]
+        if tier not in {"speed", "balanced", "quality"}:
+            await update.message.reply_text("Unknown tier. Use: speed, balanced, or quality.")
+            return
+        prev = settings.default_model_tier
+        settings.default_model_tier = tier
+        save_settings(settings, cfg_path)
+        self.agent.settings.default_model_tier = tier
+        admin_id = None
+        try:
+            admin_id = int(user.id) if user else None
+        except Exception:
+            admin_id = None
+        try:
+            self.agent.journal.write(
+                "telegram.admin_config",
+                {
+                    "action": "set_default_model_tier",
+                    "from": prev,
+                    "to": tier,
+                    "admin_user_id": admin_id,
+                    "config_path": cfg_path,
+                },
+            )
+        except Exception:
+            pass
+        await update.message.reply_text(
+            f"✅ default_model_tier set to {tier!r} (was {prev!r})."
         )
 
     async def _cmd_remind(self, update, context):

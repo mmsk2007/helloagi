@@ -104,7 +104,7 @@ class RuntimeSettings:
     memory_path: str = "memory/identity_state.json"
     journal_path: str = "memory/events.jsonl"
     db_path: str = "memory/helloagi.db"
-    # Which backbone powers agent.think(): auto | anthropic | google
+    # Which backbone powers agent.think(): auto | anthropic | google | openai
     # (env HELLOAGI_LLM_PROVIDER overrides)
     llm_provider: str = "auto"
     default_policy_pack: str = "safe-default"

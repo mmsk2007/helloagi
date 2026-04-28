@@ -285,7 +285,7 @@ def _maybe_import_existing_setup(env: dict) -> tuple[str, dict]:
 
 
 def _provider_choice_default(env: dict) -> str:
-    for provider in ("anthropic", "google"):
+    for provider in ("anthropic", "google", "openai"):
         if env["providers"].get(provider, {}).get("configured"):
             return provider
     return "template"
@@ -296,6 +296,7 @@ def _provider_choice_label(choice: str) -> str:
         "1": "template",
         "2": "anthropic",
         "3": "google",
+        "4": "openai",
     }.get(choice, choice)
 
 
@@ -329,7 +330,7 @@ def _normalize_model_tier(value: str | None, default: str = "balanced") -> str:
 
 
 def _normalize_provider(value: str | None, default: str = "template") -> str:
-    if value in {"template", "anthropic", "google"}:
+    if value in {"template", "anthropic", "google", "openai"}:
         return value
     return default
 
@@ -507,6 +508,20 @@ def _run_self_test(provider: str, provider_secret: str = "") -> dict:
             results["llm"] = {"ok": True, "response": str(text)[:60], "provider": "google"}
         except Exception as exc:
             results["llm"] = {"ok": False, "error": str(exc)[:100], "provider": "google"}
+    elif provider == "openai" and provider_secret:
+        try:
+            from openai import OpenAI
+
+            client = OpenAI(api_key=provider_secret)
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                max_tokens=24,
+                messages=[{"role": "user", "content": "Reply with exactly: HelloAGI ready"}],
+            )
+            text = (response.choices[0].message.content or "").strip()
+            results["llm"] = {"ok": True, "response": text[:60], "provider": "openai"}
+        except Exception as exc:
+            results["llm"] = {"ok": False, "error": str(exc)[:100], "provider": "openai"}
     else:
         results["llm"] = {"ok": False, "error": "Template mode (no active runtime credential)", "provider": provider}
 
@@ -644,7 +659,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     print()
 
     _step(4, total_steps, "Primary Provider")
-    print(f"    {DIM}HelloAGI runtime backbones today: template, Anthropic Claude, or Google Gemini.{NC}")
+    print(f"    {DIM}HelloAGI runtime backbones: template, Anthropic Claude, Google Gemini, or OpenAI.{NC}")
     print()
     provider_default = _provider_choice_default(env)
     primary_provider = _normalize_provider(options.provider, provider_default)
@@ -652,9 +667,10 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
         print(f"    {CYAN}1.{NC} Template mode {DIM}(no active model credential yet){NC}")
         print(f"    {CYAN}2.{NC} Anthropic Claude")
         print(f"    {CYAN}3.{NC} Google Gemini")
+        print(f"    {CYAN}4.{NC} OpenAI {DIM}(requires: pip install openai){NC}")
         provider_choice = _prompt(
-            "Active provider (1-3)",
-            {"template": "1", "anthropic": "2", "google": "3"}[provider_default],
+            "Active provider (1-4)",
+            {"template": "1", "anthropic": "2", "google": "3", "openai": "4"}[provider_default],
         )
         primary_provider = _provider_choice_label(provider_choice)
     primary_provider, primary_auth_mode, primary_env_updates = _configure_primary_provider(
@@ -664,7 +680,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
         non_interactive=options.non_interactive,
     )
     provider_secret = ""
-    if primary_provider in {"anthropic", "google"}:
+    if primary_provider in {"anthropic", "google", "openai"}:
         if primary_env_updates:
             env_name = next(iter(primary_env_updates))
             provider_secret = primary_env_updates[env_name]
@@ -673,7 +689,11 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
             provider_secret = resolve_provider_credential(primary_provider, preferred_mode=primary_auth_mode).secret
 
     print()
-    openai_auth_mode, openai_updates = _configure_optional_openai(env, non_interactive=options.non_interactive)
+    if primary_provider == "openai":
+        openai_auth_mode = primary_auth_mode if primary_auth_mode in {"api_key", "auth_token"} else "none"
+        openai_updates = dict(primary_env_updates)
+    else:
+        openai_auth_mode, openai_updates = _configure_optional_openai(env, non_interactive=options.non_interactive)
     if openai_updates:
         openai_env_name = next(iter(openai_updates))
         os.environ.setdefault(openai_env_name, openai_updates[openai_env_name])
@@ -848,7 +868,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     settings.identity_name = agent_name
     settings.name = "HelloAGI"
     settings.mission = f"Be the best {focus} assistant for {owner_name or 'the user'}"
-    settings.llm_provider = primary_provider if primary_provider in {"anthropic", "google"} else "auto"
+    settings.llm_provider = primary_provider if primary_provider in {"anthropic", "google", "openai"} else "auto"
     settings.default_policy_pack = pack_map.get(focus, "safe-default")
     settings.default_model_tier = model_tier
     settings.runtime_mode = runtime_mode
