@@ -1391,13 +1391,25 @@ class HelloAGIAgent:
             if self.reliability_enabled:
                 signal = self.loop_breaker.check(principal_id)
                 if signal.detected:
+                    if signal.loop_type == "recovery-exhausted":
+                        self.journal.write("recovery_exhausted_loop_breaker", {"principal_id": principal_id})
+                        return AgentResponse(
+                            text=self.recovery_manager.exhausted_user_message(),
+                            decision=gov.decision,
+                            risk=gov.risk,
+                            tool_calls_made=total_tool_calls,
+                            turns_used=turns_used,
+                            success=False,
+                            failure_reason="recovery_exhausted",
+                        )
                     action = self.recovery_manager.suggest(
                         loop_type=signal.loop_type, session_id=principal_id
                     )
                     if action.exhausted:
                         self.journal.write("recovery_exhausted", {})
                         return AgentResponse(
-                            text=action.instruction, decision=gov.decision, risk=gov.risk,
+                            text=self.recovery_manager.exhausted_user_message(),
+                            decision=gov.decision, risk=gov.risk,
                             tool_calls_made=total_tool_calls, turns_used=turns_used,
                             success=False, failure_reason="recovery_exhausted",
                         )
@@ -1836,13 +1848,25 @@ class HelloAGIAgent:
             if self.reliability_enabled:
                 signal = self.loop_breaker.check(principal_id)
                 if signal.detected:
+                    if signal.loop_type == "recovery-exhausted":
+                        self.journal.write("recovery_exhausted_loop_breaker", {"principal_id": principal_id})
+                        return AgentResponse(
+                            text=self.recovery_manager.exhausted_user_message(),
+                            decision=gov.decision,
+                            risk=gov.risk,
+                            tool_calls_made=total_tool_calls,
+                            turns_used=turns_used,
+                            success=False,
+                            failure_reason="recovery_exhausted",
+                        )
                     action = self.recovery_manager.suggest(
                         loop_type=signal.loop_type, session_id=principal_id
                     )
                     if action.exhausted:
                         self.journal.write("recovery_exhausted", {})
                         return AgentResponse(
-                            text=action.instruction, decision=gov.decision, risk=gov.risk,
+                            text=self.recovery_manager.exhausted_user_message(),
+                            decision=gov.decision, risk=gov.risk,
                             tool_calls_made=total_tool_calls, turns_used=turns_used,
                             success=False, failure_reason="recovery_exhausted",
                         )

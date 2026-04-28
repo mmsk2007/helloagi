@@ -31,6 +31,11 @@ class _CallRecord:
     response_hash: str = ""
 
 
+# Read-only web tools: many legitimate calls in a row (e.g. news research) are not a "stuck" loop.
+_RESEARCH_SAME_NAME_TOOLS = frozenset({"web_search", "web_fetch"})
+_RESEARCH_SAME_NAME_MIN_REPEATS = 16
+
+
 class LoopBreaker:
     """Detects repetitive agent behavior and suggests recovery.
 
@@ -198,10 +203,18 @@ class LoopBreaker:
         Catches the case where the model varies its query each retry — e.g.
         five web_searches with slightly different phrasings — which sidesteps
         the args-hash check in :py:meth:`_check_same_call`.
+
+        ``web_search`` / ``web_fetch`` get a higher bar: multi-query research is normal.
         """
-        if len(recent) < self._same_name_threshold:
+        if not recent:
             return LoopSignal()
-        tail = recent[-self._same_name_threshold:]
+        tool = recent[-1].tool
+        threshold = self._same_name_threshold
+        if tool in _RESEARCH_SAME_NAME_TOOLS:
+            threshold = max(threshold, _RESEARCH_SAME_NAME_MIN_REPEATS)
+        if len(recent) < threshold:
+            return LoopSignal()
+        tail = recent[-threshold:]
         if all(r.tool == tail[0].tool for r in tail):
             return LoopSignal(
                 detected=True,

@@ -22,6 +22,9 @@ class RecoveryAction:
 class RecoveryManager:
     """Manages recovery strategies when the agent is stuck.
 
+    When :py:meth:`suggest` returns ``exhausted=True``, use :py:meth:`exhausted_user_message`
+    for the Telegram/UI reply — not ``action.instruction`` (that text is for the model).
+
     Strategies are tried in order:
     1. Try a different tool for the same task
     2. Search the web for guidance
@@ -69,6 +72,18 @@ class RecoveryManager:
             "Do NOT claim success — be honest about the limitation.",
         ),
     ]
+
+    EXHAUSTED_USER_MESSAGE = (
+        "I stopped because the run kept repeating similar steps without converging "
+        "(internal loop protection).\n\n"
+        "Try a narrower question (one topic or one time window), or ask me to summarize "
+        "what was found so far instead of gathering more."
+    )
+
+    @staticmethod
+    def exhausted_user_message() -> str:
+        """Human-readable text when all recovery strategies have been tried."""
+        return RecoveryManager.EXHAUSTED_USER_MESSAGE
 
     def __init__(self, max_attempts: int = 5):
         self._max_attempts = max_attempts

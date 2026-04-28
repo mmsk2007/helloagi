@@ -106,6 +106,20 @@ class TestLoopBreaker(unittest.TestCase):
         signal = self.breaker.check("sess1")
         self.assertFalse(signal.detected)
 
+    def test_web_search_many_queries_higher_bar_than_bash(self):
+        """News-style research: many web_search calls should not trip same-tool-name at 5."""
+        b = LoopBreaker(window_size=40, repetition_threshold=3, same_name_threshold=5)
+        for i in range(10):
+            b.record_call("web_search", {"q": str(i)}, response=f"results-{i}", session_id="news")
+        self.assertFalse(b.check("news").detected)
+        for i in range(10, 15):
+            b.record_call("web_search", {"q": str(i)}, response=f"results-{i}", session_id="news")
+        self.assertFalse(b.check("news").detected)
+        b.record_call("web_search", {"q": "last"}, response="results-last", session_id="news")
+        sig = b.check("news")
+        self.assertTrue(sig.detected)
+        self.assertEqual(sig.loop_type, "same-tool-name")
+
 
 class TestRecoveryManager(unittest.TestCase):
     def setUp(self):
@@ -137,6 +151,11 @@ class TestRecoveryManager(unittest.TestCase):
         a = self.manager.suggest(failed_tool="bash_exec", error_msg="Timeout", session_id="s2")
         self.assertIn("bash_exec", a.instruction)
         self.assertIn("Timeout", a.instruction)
+
+    def test_exhausted_user_message_is_not_model_abort_prompt(self):
+        msg = RecoveryManager.exhausted_user_message()
+        self.assertIn("stopped", msg.lower())
+        self.assertNotIn("Do NOT claim success", msg)
 
 
 class TestStopValidator(unittest.TestCase):
