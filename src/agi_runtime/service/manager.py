@@ -131,7 +131,20 @@ class ServiceManager:
         cfg.pid = proc.pid
         cfg.started_at = time.time()
         self.save(cfg)
-        return cfg
+        # Give the HTTP server a moment to bind; clear stale PID if /health never comes up.
+        time.sleep(1.0)
+        cfg = self.load()
+        if cfg.pid and not self._is_running(cfg):
+            cfg.pid = None
+            cfg.started_at = None
+            hint = (
+                "Detached server did not respond on /health. Usually the manifest Python is not the venv where "
+                "HelloAGI is installed — run `helloagi service reinstall` from the project directory with that "
+                "venv activated (`python -c \"import agi_runtime\"` should succeed)."
+            )
+            cfg.last_error = f"{cfg.last_error}; {hint}" if cfg.last_error else hint
+            self.save(cfg)
+        return self.load()
 
     def stop(self) -> ServiceConfig:
         cfg = self.load()
@@ -235,8 +248,23 @@ class ServiceManager:
             recs.append("Manifest path missing on disk. Run `helloagi service reinstall`.")
 
         if not cfg.native_registered:
-            issues.append("native_not_registered")
-            recs.append("OS scheduler registration was not completed; re-run `helloagi service install`.")
+            if self.platform_name.startswith("windows"):
+                want_native = os.environ.get("HELLOAGI_SERVICE_NATIVE", "").strip() == "1"
+                if want_native:
+                    issues.append("native_not_registered")
+                    recs.append(
+                        "Windows Task Scheduler was not registered. Open PowerShell as Administrator, then: "
+                        "`helloagi service reinstall` and `helloagi service start`."
+                    )
+                else:
+                    notes.append(
+                        "Windows: Task Scheduler is off by default (set HELLOAGI_SERVICE_NATIVE=1 + Administrator "
+                        "`helloagi service reinstall` for auto-start at logon). Detached `helloagi service start` "
+                        "does not require it."
+                    )
+            else:
+                issues.append("native_not_registered")
+                recs.append("OS scheduler registration was not completed; re-run `helloagi service install`.")
 
         notes: list[str] = []
         win_trig = os.environ.get("HELLOAGI_WINDOWS_TASK_SCHEDULE", "onlogon")
@@ -411,7 +439,9 @@ class ServiceManager:
                 trigger = os.environ.get("HELLOAGI_WINDOWS_TASK_SCHEDULE", "onlogon").strip().lower()
                 # ONLOGON: current user session (default). ONSTART: machine boot (may require elevated shell).
                 sc_flag = "ONSTART" if trigger in ("onstart", "startup", "boot") else "ONLOGON"
-                subprocess.run(
+                # Task Scheduler expects /TR quoted when the path has spaces; quoting is safe for all paths.
+                tr = '"' + str(manifest_path).replace('"', "") + '"'
+                completed = subprocess.run(
                     [
                         "schtasks",
                         "/Create",
@@ -421,14 +451,30 @@ class ServiceManager:
                         "/TN",
                         cfg.service_name,
                         "/TR",
-                        str(manifest_path),
+                        tr,
                     ],
                     capture_output=True,
-                    check=True,
+                    check=False,
                     text=True,
                     encoding="utf-8",
                     errors="replace",
                 )
+                if completed.returncode != 0:
+                    err = (completed.stderr or "").strip() or (completed.stdout or "").strip()
+                    hint = ""
+                    if sc_flag == "ONSTART":
+                        hint = " For ONSTART, try an Administrator shell or use HELLOAGI_WINDOWS_TASK_SCHEDULE=onlogon (default)."
+                    elif "access" in err.lower() or "denied" in err.lower():
+                        hint = (
+                            " Run PowerShell as Administrator, then: helloagi service reinstall && helloagi service start. "
+                            "Or unset HELLOAGI_SERVICE_NATIVE (default on Windows skips Task Scheduler)."
+                        )
+                    elif not err:
+                        hint = " Try: schtasks /Delete /TN helloagi /F  then  helloagi service reinstall"
+                    cfg.last_error = (
+                        f"schtasks /Create failed (exit {completed.returncode}): {err or '(no message)'}.{hint}"
+                    )
+                    return False
                 return True
             if cfg.backend == "launchd":
                 uid = str(os.getuid())
@@ -493,7 +539,10 @@ class ServiceManager:
     def _is_running(self, cfg: ServiceConfig) -> bool:
         if cfg.native_registered and self._native_running(cfg):
             return True
-        return bool(cfg.pid and self._pid_alive(cfg.pid))
+        if not (cfg.pid and self._pid_alive(cfg.pid)):
+            return False
+        # Detached child: PID alone is misleading (process can exit after bind failure or wrong interpreter).
+        return bool(self.health().get("ok"))
 
     def _native_running(self, cfg: ServiceConfig) -> bool:
         if not self.native_control:

@@ -554,9 +554,24 @@ def tools_info(policy_pack: str = "safe-default") -> str:
     return "\n".join(lines)
 
 
+def _service_manager():
+    """Windows: Task Scheduler is opt-in (``HELLOAGI_SERVICE_NATIVE=1``) to avoid ``Access is denied`` for typical users."""
+    import os
+    import platform
+
+    from agi_runtime.service.manager import ServiceManager
+
+    raw = os.environ.get("HELLOAGI_SERVICE_NATIVE", "").strip().lower()
+    if raw == "":
+        # Linux/macOS: register with systemd/launchd by default. Windows: skip schtasks unless opted in.
+        native = platform.system().lower() != "windows"
+    else:
+        native = raw not in ("0", "false", "no", "off", "disabled")
+    return ServiceManager(native_control=native)
+
+
 def service_install(args):
     from agi_runtime.extensions.manager import ExtensionManager
-    from agi_runtime.service.manager import ServiceManager
 
     extension_names = list(args.extension or [])
     if getattr(args, "voice", False) and "voice" not in extension_names:
@@ -564,7 +579,7 @@ def service_install(args):
     for enabled_name in ExtensionManager().enabled_names(category="channel"):
         if enabled_name not in extension_names:
             extension_names.append(enabled_name)
-    cfg = ServiceManager().install(
+    cfg = _service_manager().install(
         host=args.host,
         port=args.port,
         config_path=args.config,
@@ -594,44 +609,34 @@ def service_install(args):
 
 
 def service_start():
-    from agi_runtime.service.manager import ServiceManager
-
-    cfg = ServiceManager().start()
-    print(ServiceManager().status())
+    cfg = _service_manager().start()
+    print(_service_manager().status())
 
 
 def service_stop():
-    from agi_runtime.service.manager import ServiceManager
-
-    cfg = ServiceManager().stop()
-    print(ServiceManager().status())
+    cfg = _service_manager().stop()
+    print(_service_manager().status())
 
 
 def service_status():
-    from agi_runtime.service.manager import ServiceManager
-
-    print(ServiceManager().status())
+    print(_service_manager().status())
 
 
 def service_uninstall():
-    from agi_runtime.service.manager import ServiceManager
-
-    cfg = ServiceManager().uninstall()
+    cfg = _service_manager().uninstall()
     print({"installed": cfg.installed, "running": False, "backend": cfg.backend})
 
 
 def service_reinstall(args):
     """Rewrite unit/manifest from saved service state (after venv move or upgrade)."""
     from agi_runtime.extensions.manager import ExtensionManager
-    from agi_runtime.service.manager import ServiceManager
-
     extension_names = list(args.extension or [])
     if getattr(args, "voice", False) and "voice" not in extension_names:
         extension_names.append("voice")
     for enabled_name in ExtensionManager().enabled_names(category="channel"):
         if enabled_name not in extension_names:
             extension_names.append(enabled_name)
-    sm = ServiceManager()
+    sm = _service_manager()
     cfg = sm.reinstall(
         host=args.host,
         port=args.port,
@@ -658,9 +663,7 @@ def service_reinstall(args):
 
 
 def service_doctor():
-    from agi_runtime.service.manager import ServiceManager
-
-    print(ServiceManager().doctor())
+    print(_service_manager().doctor())
 
 
 def migrate(source: str, path: str = None, apply: bool = False, overwrite: bool = False, rename_imports: bool = False):

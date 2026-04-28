@@ -10,7 +10,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from agi_runtime.skills.skill_bank import SkillBank
 from agi_runtime.skills.skill_retriever import SkillMatch, SkillRetriever
@@ -197,6 +197,31 @@ invoke_count: 0
         if not self._bank_enabled:
             return ""
         return self.bank.get_skills_index(max_skills=20)
+
+    def bind_embedding_store(self, store) -> None:
+        """Attach Gemini embedding store for COS-PLAY-style semantic skill retrieval."""
+        self._retriever.bind_embedding_store(store)
+
+    def merge_skills(self, keep_id: str, absorb_id: str) -> Optional[SkillContract]:
+        """Merge two contracts; ``absorb_id`` is retired (bank curation)."""
+        if not self._bank_enabled:
+            return None
+        merged = self.bank.merge_skills(keep_id, absorb_id)
+        if merged:
+            self._retriever.invalidate_embedding_cache(keep_id, absorb_id)
+        return merged
+
+    def split_skill(
+        self, source_id: str, new_name: str, steps_for_new: List[str],
+    ) -> Tuple[Optional[SkillContract], Optional[SkillContract]]:
+        """Split a contiguous execution-step block into a new candidate skill."""
+        if not self._bank_enabled:
+            return None, None
+        new_c, updated = self.bank.split_skill(source_id, new_name, steps_for_new)
+        if new_c:
+            self._retriever.invalidate_embedding_cache(source_id)
+            self._retriever.invalidate_embedding_cache(new_c.skill_id)
+        return new_c, updated
 
     def increment_invoke_count(self, name: str):
         c = self.bank.get_by_name(name)

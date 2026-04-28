@@ -10,7 +10,7 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set, Tuple
 
 from agi_runtime.skills.skill_schema import SkillContract
 
@@ -122,6 +122,101 @@ class SkillBank:
             skill.status = "archived"
             return self.update(skill)
         return None
+
+    def merge_skills(self, keep_id: str, absorb_id: str) -> Optional[SkillContract]:
+        """COS-PLAY-style bank curation: fold ``absorb`` into ``keep``, then retire absorb.
+
+        Combines triggers, tools, execution steps, and failure modes; bumps ``keep`` version.
+        Returns the updated keeper, or ``None`` if ids are invalid or identical.
+        """
+        if keep_id == absorb_id:
+            return None
+        keep = self._skills.get(keep_id)
+        absorb = self._skills.get(absorb_id)
+        if not keep or not absorb:
+            return None
+
+        def _uniq(seq: List[str]) -> List[str]:
+            seen: Set[str] = set()
+            out: List[str] = []
+            for item in seq:
+                key = (item or "").strip()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                out.append(item.strip())
+            return out
+
+        keep.triggers = _uniq(list(keep.triggers) + list(absorb.triggers))
+        keep.tags = _uniq(list(keep.tags) + list(absorb.tags))
+        keep.tools_required = _uniq(list(keep.tools_required) + list(absorb.tools_required))
+        keep.preconditions = _uniq(list(keep.preconditions) + list(absorb.preconditions))
+        keep.execution_steps = _uniq(list(keep.execution_steps) + list(absorb.execution_steps))
+        keep.success_criteria = _uniq(list(keep.success_criteria) + list(absorb.success_criteria))
+        for fm in absorb.failure_modes:
+            if fm and fm not in keep.failure_modes:
+                keep.failure_modes.append(fm)
+        desc_bits = [d for d in (keep.description, absorb.description) if (d or "").strip()]
+        if desc_bits:
+            keep.description = " | ".join(desc_bits)[:2000]
+
+        absorb.status = "retired"
+        absorb.updated_at = time.time()
+        self._save(absorb)
+
+        keep.usage_count += absorb.usage_count
+        keep.success_count += absorb.success_count
+        keep.failure_count += absorb.failure_count
+        keep.compute_risk_level()
+        return self.update(keep)
+
+    def split_skill(
+        self,
+        source_id: str,
+        new_name: str,
+        steps_for_new: List[str],
+    ) -> Tuple[Optional[SkillContract], Optional[SkillContract]]:
+        """Split a contiguous block of execution steps into a new candidate skill.
+
+        Returns ``(new_skill, updated_source)`` or ``(None, None)`` if the step block
+        is not found as a contiguous subsequence of ``source.execution_steps``.
+        """
+        src = self._skills.get(source_id)
+        if not src or not new_name.strip() or not steps_for_new:
+            return None, None
+        seq = [s.strip() for s in steps_for_new if str(s).strip()]
+        es = [s.strip() for s in src.execution_steps]
+        n = len(seq)
+        if n == 0 or n > len(es):
+            return None, None
+        found_at = -1
+        for i in range(len(es) - n + 1):
+            if es[i : i + n] == seq:
+                found_at = i
+                break
+        if found_at < 0:
+            return None, None
+
+        branch_steps = es[found_at : found_at + n]
+        remaining = es[:found_at] + es[found_at + n :]
+
+        new_skill = SkillContract(
+            name=new_name.strip(),
+            description=f"Split from {src.name}",
+            triggers=list(src.triggers)[:5],
+            tools_required=list(dict.fromkeys(src.tools_required)),
+            preconditions=list(src.preconditions)[:5],
+            execution_steps=branch_steps,
+            status="candidate",
+            confidence_score=max(0.35, min(0.85, src.confidence_score * 0.85)),
+        )
+        new_skill.compute_risk_level()
+        self.add(new_skill)
+
+        src.execution_steps = remaining
+        src.updated_at = time.time()
+        src.compute_risk_level()
+        return new_skill, self.update(src)
 
     def apply_decay(self) -> List[str]:
         """Apply confidence decay to unused skills. Returns IDs of retired skills."""

@@ -14,7 +14,7 @@ helloagi service status
 
 - **Linux (systemd user):** unit under `~/.config/systemd/user/helloagi.service` with `Restart=on-failure`, burst limits, and `PYTHONUNBUFFERED=1`. Reload after edits: `systemctl --user daemon-reload`.
 - **macOS (launchd):** plist in `~/Library/LaunchAgents/` with `RunAtLoad` and `KeepAlive`.
-- **Windows (Task Scheduler):** wrapper `.cmd` in `%USERPROFILE%\.helloagi\service\`; default trigger is **`ONLOGON`** (current user session). For **machine boot** before interactive logon, set `HELLOAGI_WINDOWS_TASK_SCHEDULE=onstart` (values: `onstart`, `startup`, or `boot`) and run **`helloagi service reinstall`** — creation may require an **elevated** shell.
+- **Windows:** by default HelloAGI **does not** call Task Scheduler (`schtasks`) so non-admin installs avoid **Access is denied**. The service still installs `run-helloagi-service.cmd` under `%USERPROFILE%\.helloagi\service\`; use **`helloagi service start`** for a detached background process. For **auto-start at logon**, set **`HELLOAGI_SERVICE_NATIVE=1`**, open **Administrator** PowerShell, then **`helloagi service reinstall`**. Trigger is **`ONLOGON`** unless `HELLOAGI_WINDOWS_TASK_SCHEDULE=onstart` (machine boot; often requires elevation).
 
 ### After `pip install -U` or moving the venv
 

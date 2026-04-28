@@ -41,6 +41,29 @@ class TestCompletionVerifier(unittest.TestCase):
         self.assertEqual(check.status, "verified")
         self.assertEqual(check.claims_verified, 1)
 
+    def test_verify_file_claim_requires_file_tool_evidence(self):
+        text = "I've just created the file for you."
+        ev = [{"tool": "web_search", "ok": True, "output": "results", "input": {"q": "x"}}]
+        check = self.verifier.verify(
+            text,
+            tool_calls_made=1,
+            tools_used=["web_search"],
+            session_evidence=ev,
+        )
+        self.assertEqual(check.status, "phantom")
+        self.assertTrue(any("insufficient-evidence" in r for r in check.reasons))
+
+    def test_verify_file_claim_with_file_write_evidence(self):
+        text = "I've created the script."
+        ev = [{"tool": "file_write", "ok": True, "output": "wrote /tmp/a.py", "input": {"path": "/tmp/a.py"}}]
+        check = self.verifier.verify(
+            text,
+            tool_calls_made=1,
+            tools_used=["file_write"],
+            session_evidence=ev,
+        )
+        self.assertEqual(check.status, "verified")
+
     def test_verify_unverified_task_complete(self):
         text = "The task is complete."
         check = self.verifier.verify(text, tool_calls_made=0)

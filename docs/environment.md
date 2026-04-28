@@ -31,6 +31,10 @@ ChatGPT/Codex OAuth (see **`helloagi auth login-openai`** in [providers.md](prov
 - `HELLOAGI_API_KEY`
   Shared auth token for the local HelloAGI API, dashboard, and service-aware clients.
 
+- `HELLOAGI_SERVICE_NATIVE`
+  **Windows:** unset = **do not** register with Task Scheduler (avoids common **Access is denied** on `schtasks /Create`). `helloagi service install` still writes `run-helloagi-service.cmd`; `helloagi service start` runs a detached `serve` process. Set to **`1`** and run **`helloagi service reinstall`** once from **Administrator** PowerShell if you want **auto-start at logon** via Task Scheduler. Set to `0` / `false` / `off` to force skip even if you later change defaults.
+  **Linux / macOS:** unset = register with systemd user unit or launchd (unchanged).
+
 - `HELLOAGI_CONFIG_PATH`
   Optional; normally set automatically by `helloagi serve` to the `--config` path so Telegram admin commands (`/provider`, `/model`) persist to the same `helloagi.json` the server loaded.
 

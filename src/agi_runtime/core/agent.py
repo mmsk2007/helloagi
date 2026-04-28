@@ -466,6 +466,26 @@ class HelloAGIAgent:
     def _session_tool_calls(self, value: List[dict]) -> None:
         self._session_tool_calls_by_principal[self.current_principal()] = value
 
+    def _completion_session_evidence(self) -> Optional[List[Dict[str, Any]]]:
+        """Structured tool rows for VLAA-style completion checks (None if empty)."""
+        rows = self._session_tool_calls
+        if not rows:
+            return None
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            text_out = row.get("output")
+            if not isinstance(text_out, str):
+                text_out = ""
+            out.append({
+                "tool": str(row.get("tool", "")),
+                "ok": bool(row.get("ok", False)),
+                "output": text_out[:8000],
+                "input": row.get("input") if isinstance(row.get("input"), dict) else {},
+            })
+        return out
+
     def _configure_llm_backbone(self) -> None:
         """Pick Anthropic vs Google vs OpenAI from settings/env and available credentials."""
         env_override = os.environ.get("HELLOAGI_LLM_PROVIDER")
@@ -1290,6 +1310,7 @@ class HelloAGIAgent:
         # 5. Agentic loop (Claude or Gemini)
         self._history.append({"role": "user", "content": user_input})
         self._session_tool_calls = []
+        self.skills.bind_embedding_store(self.embedding_store)
         tools = self._get_tool_schemas()
         system_prompt = self._build_system_prompt(
             bootstrap_instruction=bootstrap_instruction,
@@ -1647,7 +1668,10 @@ class HelloAGIAgent:
                 if self.reliability_enabled:
                     tools_used_names = [tc["tool"] for tc in self._session_tool_calls]
                     comp_check = self.completion_verifier.verify(
-                        final_text, tool_calls_made=total_tool_calls, tools_used=tools_used_names
+                        final_text,
+                        tool_calls_made=total_tool_calls,
+                        tools_used=tools_used_names,
+                        session_evidence=self._completion_session_evidence(),
                     )
                     if comp_check.status == "phantom":
                         self.journal.write("phantom_completion", {"reasons": comp_check.reasons})
@@ -1744,7 +1768,12 @@ class HelloAGIAgent:
                         "tool_use_id": tc.id,
                         "content": delegation_result,
                     })
-                    self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": True})
+                    self._session_tool_calls.append({
+                        "tool": tc.name,
+                        "input": tc.input,
+                        "ok": True,
+                        "output": (delegation_result or "")[:8000],
+                    })
                     if self.on_tool_end:
                         self.on_tool_end(tc.name, True, delegation_result[:200])
                     continue
@@ -1830,6 +1859,7 @@ class HelloAGIAgent:
                     "tool": tc.name,
                     "input": tc.input,
                     "ok": result.ok,
+                    "output": result.to_content()[:8000],
                 })
 
                 if self.reliability_enabled:
@@ -2021,7 +2051,10 @@ class HelloAGIAgent:
                 if self.reliability_enabled:
                     tools_used_names = [tc["tool"] for tc in self._session_tool_calls]
                     comp_check = self.completion_verifier.verify(
-                        final_text, tool_calls_made=total_tool_calls, tools_used=tools_used_names
+                        final_text,
+                        tool_calls_made=total_tool_calls,
+                        tools_used=tools_used_names,
+                        session_evidence=self._completion_session_evidence(),
                     )
                     if comp_check.status == "phantom":
                         self.journal.write("phantom_completion", {"reasons": comp_check.reasons})
@@ -2118,7 +2151,12 @@ class HelloAGIAgent:
                         "tool_use_id": tc.id,
                         "content": delegation_result,
                     })
-                    self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": True})
+                    self._session_tool_calls.append({
+                        "tool": tc.name,
+                        "input": tc.input,
+                        "ok": True,
+                        "output": (delegation_result or "")[:8000],
+                    })
                     if self.on_tool_end:
                         self.on_tool_end(tc.name, True, delegation_result[:200])
                     continue
@@ -2204,6 +2242,7 @@ class HelloAGIAgent:
                     "tool": tc.name,
                     "input": tc.input,
                     "ok": result.ok,
+                    "output": result.to_content()[:8000],
                 })
 
                 if self.reliability_enabled:
@@ -2629,7 +2668,10 @@ class HelloAGIAgent:
                 if self.reliability_enabled:
                     tools_used_names = [tc["tool"] for tc in self._session_tool_calls]
                     comp_check = self.completion_verifier.verify(
-                        final_text, tool_calls_made=total_tool_calls, tools_used=tools_used_names
+                        final_text,
+                        tool_calls_made=total_tool_calls,
+                        tools_used=tools_used_names,
+                        session_evidence=self._completion_session_evidence(),
                     )
                     if comp_check.status == "phantom":
                         self.journal.write("phantom_completion", {"reasons": comp_check.reasons})
@@ -2728,7 +2770,12 @@ class HelloAGIAgent:
                             name=tc.name, response={"result": delegation_result}
                         )
                     )
-                    self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": True})
+                    self._session_tool_calls.append({
+                        "tool": tc.name,
+                        "input": tc.input,
+                        "ok": True,
+                        "output": (delegation_result or "")[:8000],
+                    })
                     if self.on_tool_end:
                         self.on_tool_end(tc.name, True, delegation_result[:200])
                     continue
@@ -2795,8 +2842,13 @@ class HelloAGIAgent:
                     "governance": tool_gov.decision,
                     "risk": tool_gov.risk,
                 })
-                self._session_tool_calls.append({"tool": tc.name, "input": tc.input, "ok": result.ok})
                 out = result.to_content()
+                self._session_tool_calls.append({
+                    "tool": tc.name,
+                    "input": tc.input,
+                    "ok": result.ok,
+                    "output": out[:8000],
+                })
 
                 if self.reliability_enabled:
                     self.loop_breaker.record_call(

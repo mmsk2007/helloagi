@@ -11,7 +11,7 @@
 1. Create and activate a **venv** (see Option 0 below), especially on Windows or conda `base`.
 2. **Install** HelloAGI: `pip install -e ".[rich,telegram]"` from a clone, or `pip install "helloagi[rich,telegram]"` from PyPI.
 3. **Onboard:** `helloagi onboard` or `python -m agi_runtime.cli onboard` (same interpreter as step 2).
-4. **Stay online (Telegram/Discord):** from the project directory, `helloagi service install --telegram` then `helloagi service start` (see [Telegram or Discord after onboarding](#telegram-or-discord-after-onboarding)). For a quick foreground trial only, use `helloagi serve --telegram`.
+4. **Stay online (Telegram/Discord):** from the project directory (with your **venv** activated), `helloagi service install --telegram` then `helloagi service start` (see [Telegram or Discord after onboarding](#telegram-or-discord-after-onboarding)). On **Windows**, Task Scheduler registration is **opt-in** (`HELLOAGI_SERVICE_NATIVE=1` + Administrator reinstall) so `service install` does not hit **Access is denied** by default. For a quick foreground trial only, use `helloagi serve --telegram`.
 5. **Verify:** `helloagi health`, `helloagi service status`, and `helloagi onboard-status`.
 
 There is no separate OpenClaw-style `doctor --fix` auto-migration yet; if config drifts, re-run `helloagi onboard` or edit `helloagi.json` / `.env` manually.

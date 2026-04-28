@@ -341,6 +341,7 @@ SRG is **deeply integrated** across HelloAGI. It is NOT a bolt-on:
 - **SRG integration**: Strategy switches as governed decisions
 
 ### Priority 4: Context Management (ContextPaper-inspired)
+- **Naming**: This roadmap item refers to **ContextPaper**-style structured long-context handling (rolling windows, relevance scoring, unrolling). It is **not** a bundled repository in this monorepo; searches for a folder named `contextpapet` are usually a typo for **ContextPaper** or this priority block.
 - **Where**: Extend `memory/compressor.py` and `intelligence/context_compiler.py`
 - **What**: Structured rolling context, memory relevance scoring, context unrolling
 - **Risk**: Low-Medium — mostly affects system prompt construction

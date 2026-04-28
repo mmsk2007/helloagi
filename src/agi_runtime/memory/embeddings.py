@@ -180,6 +180,11 @@ def _cosine_similarity(a: List[float], b: List[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+def cosine_similarity_vectors(a: List[float], b: List[float]) -> float:
+    """Public cosine similarity helper for skill retrieval and other callers."""
+    return _cosine_similarity(a, b)
+
+
 def _entry_visible_for_principal(
     entry: EmbeddingEntry,
     principal_id: Optional[str],
