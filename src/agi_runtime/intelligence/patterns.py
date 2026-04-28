@@ -250,6 +250,42 @@ class PatternDetector:
 
         return "\n".join(lines)
 
+    def get_tools_for_topic(
+        self,
+        text: str,
+        *,
+        top_n: int = 3,
+        min_uses: int = 2,
+        min_overlap: int = 1,
+    ) -> list:
+        """Tools historically used on tasks sharing topic words with ``text``.
+
+        Looks back at recorded interactions, finds those whose ``topic_words``
+        overlap by at least ``min_overlap`` with the words extracted from
+        ``text``, and returns the top tools by frequency. Used by the agent
+        to surface a "last time you asked about X you used tool Y" hint
+        before the agent picks tools — directly attacks the failure mode
+        where the agent forgets it has a browser.
+
+        Returns: list of ``(tool_name, count)`` tuples, longest-first.
+        """
+        if not text:
+            return []
+        query_words = {
+            w.lower() for w in text.split() if len(w) > 4 and w.isalpha()
+        }
+        if not query_words:
+            return []
+        tool_counts: Counter = Counter()
+        for entry in self.data.get("interactions", []):
+            entry_words = set(entry.get("topic_words") or [])
+            if len(query_words & entry_words) < min_overlap:
+                continue
+            for t in entry.get("tools") or []:
+                if t:
+                    tool_counts[t] += 1
+        return [(t, c) for t, c in tool_counts.most_common(top_n) if c >= min_uses]
+
     def get_personalization_prompt(self) -> str:
         """Generate personalization context for the system prompt."""
         patterns = self.detect_patterns()

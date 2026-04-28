@@ -49,6 +49,43 @@ def _default_browser() -> Dict[str, Any]:
     }
 
 
+def _default_cognitive_runtime() -> Dict[str, Any]:
+    return {
+        # Master switch. False keeps behavior identical to pre-cognitive HelloAGI.
+        "enabled": False,
+        # observe | system1_only | dual
+        "mode": "observe",
+        # System 1 firing thresholds.
+        "system1_relevance_threshold": 0.75,
+        "system1_confidence_threshold": 0.70,
+        # Above this risk score we always go System 2.
+        "risk_escalation_threshold": 0.50,
+        # How many recent fingerprints stay "seen" for novelty scoring.
+        "novelty_lookback_events": 200,
+        # Phase 3+: Agent Council configuration. Read but unused in observe.
+        "council": {
+            "agents": ["planner", "critic", "risk_auditor", "synthesizer"],
+            "min_quorum": 3,
+            "max_rounds": 2,
+            "tie_breaker": "synthesizer",
+        },
+        # Phase 4+: when System 2 traces crystallize into Skills.
+        "crystallization": {
+            "min_council_successes": 3,
+            "min_agent_agreement": 0.66,
+        },
+        # Mid-loop stall detector — catches "N silent tool-only turns in a
+        # row" so the agent doesn't burn 40 turns floundering. ``enabled``
+        # gates the warning injection itself; the detector still observes.
+        "stall": {
+            "enabled": True,
+            "silent_turn_budget": 4,
+            "warm_up_tool_calls": 5,
+            "text_threshold": 40,
+        },
+    }
+
+
 def _merge_section(default: Dict[str, Any], raw_val: Any) -> Dict[str, Any]:
     """Shallow-merge a feature section dict from JSON onto defaults."""
     out = dict(default)
@@ -85,6 +122,7 @@ class RuntimeSettings:
     skill_bank: Dict[str, Any] = field(default_factory=_default_skill_bank)
     context: Dict[str, Any] = field(default_factory=_default_context)
     browser: Dict[str, Any] = field(default_factory=_default_browser)
+    cognitive_runtime: Dict[str, Any] = field(default_factory=_default_cognitive_runtime)
 
 
 def load_settings(path: str = "helloagi.json") -> RuntimeSettings:
@@ -112,6 +150,9 @@ def load_settings(path: str = "helloagi.json") -> RuntimeSettings:
     )
     filtered["browser"] = _merge_section(
         dict(_default_browser()), merged.get("browser")
+    )
+    filtered["cognitive_runtime"] = _merge_section(
+        dict(_default_cognitive_runtime()), merged.get("cognitive_runtime")
     )
     return RuntimeSettings(**filtered)
 

@@ -1,5 +1,7 @@
 """Tests for text-only synthesis when the main tool loop hits max_turns."""
 
+from __future__ import annotations
+
 import asyncio
 
 import pytest
@@ -7,6 +9,34 @@ from unittest.mock import MagicMock
 
 from agi_runtime.config.settings import RuntimeSettings
 from agi_runtime.core.agent import HelloAGIAgent
+
+
+class _FakeStream:
+    """Fake Anthropic ``messages.stream()`` context manager.
+
+    Yields no events when iterated and returns ``final`` from
+    ``get_final_message()`` — enough to satisfy
+    ``_drain_anthropic_stream``'s contract for tests that only care about
+    the final response shape.
+    """
+
+    def __init__(self, final, *, raise_on_enter: Exception | None = None):
+        self._final = final
+        self._raise = raise_on_enter
+
+    def __enter__(self):
+        if self._raise is not None:
+            raise self._raise
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def __iter__(self):
+        return iter(())  # no token deltas in these tests
+
+    def get_final_message(self):
+        return self._final
 
 
 @pytest.fixture
@@ -25,7 +55,7 @@ def test_synthesize_claude_text_only_no_tools_in_request(agent: HelloAGIAgent):
     resp = MagicMock()
     resp.content = [block]
     agent._claude = MagicMock()
-    agent._claude.messages.create = MagicMock(return_value=resp)
+    agent._claude.messages.stream = MagicMock(return_value=_FakeStream(resp))
     agent._select_model = MagicMock(return_value="claude-3-5-haiku-20241022")
     agent._history = [
         {"role": "user", "content": "What are the latest news on AI?"},
@@ -36,8 +66,8 @@ def test_synthesize_claude_text_only_no_tools_in_request(agent: HelloAGIAgent):
     )
 
     assert "concise summary" in out
-    agent._claude.messages.create.assert_called_once()
-    kwargs = agent._claude.messages.create.call_args[1]
+    agent._claude.messages.stream.assert_called_once()
+    kwargs = agent._claude.messages.stream.call_args[1]
     assert "tools" not in kwargs
 
 
@@ -49,7 +79,9 @@ def test_message_after_max_turns_mentions_user_snippet(agent: HelloAGIAgent):
 
 def test_synthesize_claude_text_only_returns_empty_on_error(agent: HelloAGIAgent):
     agent._claude = MagicMock()
-    agent._claude.messages.create = MagicMock(side_effect=RuntimeError("API down"))
+    agent._claude.messages.stream = MagicMock(
+        return_value=_FakeStream(None, raise_on_enter=RuntimeError("API down"))
+    )
     agent._history = []
     out = asyncio.run(agent._synthesize_claude_text_only("hi", "sys"))
     assert out == ""

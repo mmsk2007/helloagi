@@ -31,5 +31,29 @@
     "enabled": true,
     "headless": true,
     "max_nav_per_min": 10
+  },
+  "cognitive_runtime": {
+    "enabled": true,
+    "mode": "observe",
+    "system1_relevance_threshold": 0.75,
+    "system1_confidence_threshold": 0.70,
+    "risk_escalation_threshold": 0.50,
+    "novelty_lookback_events": 200,
+    "council": {
+      "agents": ["planner", "critic", "risk_auditor", "synthesizer"],
+      "min_quorum": 3,
+      "max_rounds": 2,
+      "tie_breaker": "synthesizer"
+    },
+    "crystallization": {
+      "min_council_successes": 3,
+      "min_agent_agreement": 0.66
+    },
+    "stall": {
+      "enabled": true,
+      "silent_turn_budget": 4,
+      "warm_up_tool_calls": 5,
+      "text_threshold": 40
+    }
   }
 }

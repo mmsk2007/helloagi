@@ -55,9 +55,15 @@ class LoopBreaker:
         *,
         window_size: int = 20,
         repetition_threshold: int = 3,
+        same_name_threshold: int = 5,
     ):
         self._window_size = window_size
         self._threshold = repetition_threshold
+        # Looser pattern: same tool *name* (regardless of args). Catches the
+        # case where the model reformulates the query each retry and the
+        # args-hash check misses it — e.g. five web_searches with slightly
+        # different phrasings all asking the same thing.
+        self._same_name_threshold = same_name_threshold
         # Per-session tracking
         self._sessions: Dict[str, Deque[_CallRecord]] = {}
         self._recovery_count: Dict[str, int] = {}  # Track recovery attempts
@@ -120,6 +126,12 @@ class LoopBreaker:
             self._recovery_count[session_id] = self._recovery_count.get(session_id, 0) + 1
             return signal
 
+        # Pattern 4: Same tool *name* repeated regardless of args.
+        signal = self._check_same_tool_name(recent)
+        if signal.detected:
+            self._recovery_count[session_id] = self._recovery_count.get(session_id, 0) + 1
+            return signal
+
         return LoopSignal()
 
     def reset(self, session_id: str = "default") -> None:
@@ -176,6 +188,33 @@ class LoopBreaker:
                     f"LOOP DETECTED: You've produced the same response pattern "
                     f"{len(hashes)} times. You appear to be stuck in a loop. "
                     f"Try a fundamentally different approach to this task."
+                ),
+            )
+        return LoopSignal()
+
+    def _check_same_tool_name(self, recent: List[_CallRecord]) -> LoopSignal:
+        """Detect repeated calls to the same tool *name*, ignoring args.
+
+        Catches the case where the model varies its query each retry — e.g.
+        five web_searches with slightly different phrasings — which sidesteps
+        the args-hash check in :py:meth:`_check_same_call`.
+        """
+        if len(recent) < self._same_name_threshold:
+            return LoopSignal()
+        tail = recent[-self._same_name_threshold:]
+        if all(r.tool == tail[0].tool for r in tail):
+            return LoopSignal(
+                detected=True,
+                loop_type="same-tool-name",
+                repetition_count=len(tail),
+                recovery_instruction=(
+                    f"LOOP DETECTED: You've called '{tail[0].tool}' "
+                    f"{len(tail)} times in a row with varying arguments and "
+                    "still aren't converging on an answer. Stop calling "
+                    f"'{tail[0].tool}'. Either summarise what you've already "
+                    "learned and answer the user with that, or ask the user "
+                    "to clarify (use 'ask_user' if helpful) — don't keep "
+                    "issuing more queries."
                 ),
             )
         return LoopSignal()

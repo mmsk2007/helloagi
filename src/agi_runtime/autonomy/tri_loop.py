@@ -104,6 +104,9 @@ class TriLoopResult:
     total_duration_sec: float = 0.0
     # Set when status is "passed"; the successful plan, for learning.
     successful_plan: Optional[Plan] = None
+    # Cognitive router decision recorded at start (observation-only in
+    # autonomous mode for now — Phase 6 may use it to gate plan review).
+    routing_decision: Optional[Any] = None
 
     @property
     def passed(self) -> bool:
@@ -148,6 +151,7 @@ class TriLoop:
         skill_extractor: Optional[SkillExtractor] = None,
         skill_governance_adapter: Optional[Any] = None,
         skill_auto_extract: bool = True,
+        cognitive_router: Optional[Any] = None,
     ):
         self.agent = agent
         # Reuse the agent's own governor when available so policy packs
@@ -163,6 +167,14 @@ class TriLoop:
         self.skill_extractor = skill_extractor or SkillExtractor()
         self.skill_governance_adapter = skill_governance_adapter
         self.skill_auto_extract = skill_auto_extract
+        # Borrow the agent's cognitive router when available so autonomous
+        # runs share the System 1/System 2 routing surface that interactive
+        # turns already use. Observation-only here: the router gets to
+        # SEE every autonomous goal (and update fingerprints / journal
+        # decisions) without changing TriLoop's plan/execute/verify path.
+        self.cognitive_router = cognitive_router or getattr(
+            agent, "cognitive_router", None
+        )
 
     # ------------------------------------------------------------------ run
     def run(
@@ -192,6 +204,32 @@ class TriLoop:
                 pre_flight=pre_flight,
                 total_duration_sec=self._now() - started,
             )
+
+        # ---------- Cognitive routing (autonomous-mode observation) ------
+        # If a cognitive router is wired in, ask it for a routing decision.
+        # Observation-only: we journal the decision and stash it on the
+        # result so the dashboard sees autonomous-path routes alongside
+        # interactive ones. Plan/execute/verify is unchanged.
+        routing_decision = None
+        if self.cognitive_router is not None:
+            try:
+                routing_decision = self.cognitive_router.decide(
+                    user_input=goal,
+                    gov=pre_flight,
+                    posture_name=posture.name,
+                )
+                self._journal("triloop.routing.decided", {
+                    "system": getattr(routing_decision, "system", ""),
+                    "fingerprint": getattr(routing_decision, "fingerprint", ""),
+                    "reason": getattr(routing_decision, "reason", ""),
+                    "risk": getattr(routing_decision, "risk", 0.0),
+                    "skill_match": getattr(
+                        routing_decision, "skill_match_name", ""
+                    ) or "",
+                })
+            except Exception as exc:
+                # Routing is informational; never let it break a run.
+                self._journal("triloop.routing.error", {"error": str(exc)})
 
         max_iters = max_iterations if max_iterations is not None else (
             posture.max_replan_budget + 1  # 1 initial + N replans
@@ -233,6 +271,7 @@ class TriLoop:
                         pre_flight=pre_flight,
                         iterations=iterations,
                         total_duration_sec=self._now() - started,
+                        routing_decision=routing_decision,
                     )
 
             # ---------- Execute --------------------------------------------
@@ -278,6 +317,7 @@ class TriLoop:
                     final_verdict=verdict,
                     successful_plan=plan,
                     total_duration_sec=self._now() - started,
+                    routing_decision=routing_decision,
                 )
                 self._maybe_extract_skill(goal, plan, iterations)
                 return result
@@ -302,6 +342,7 @@ class TriLoop:
                     final_outputs=outputs,
                     final_verdict=verdict,
                     total_duration_sec=self._now() - started,
+                    routing_decision=routing_decision,
                 )
 
         # Loop bound exhausted without passing.
@@ -317,6 +358,7 @@ class TriLoop:
             ),
             final_verdict=last_iter.verify if last_iter else None,
             total_duration_sec=self._now() - started,
+            routing_decision=routing_decision,
         )
 
     # ------------------------------------------------------------- step

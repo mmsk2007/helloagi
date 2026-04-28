@@ -286,10 +286,7 @@ class TelegramChannel(BaseChannel):
         st["lines"] = st["lines"][-10:]
         joined = "\n".join(st["lines"])
         st["pending"] = joined
-        if len(joined) > _TG_LIVE_MAX_PREVIEW:
-            st["pending_for_edit"] = joined[: _TG_LIVE_MAX_PREVIEW - 8] + "\n…(trimmed)"
-        else:
-            st["pending_for_edit"] = joined
+        st["pending_for_edit"] = joined
         prev = st.get("debounce_task")
         if prev is not None and not prev.done():
             prev.cancel()
@@ -302,23 +299,180 @@ class TelegramChannel(BaseChannel):
         except asyncio.CancelledError:
             return
 
+    async def _safe_edit_text(self, st: dict, body: str) -> bool:
+        """Edit the live-preview message with HTML→plain fallback and flood control.
+
+        Returns True on a successful edit (or harmless no-op like
+        "message is not modified"); False otherwise. Increments
+        ``st['flood_strikes']`` on failure and disables the live preview
+        permanently after 3 strikes so we stop hammering Telegram.
+        """
+        if st.get("disabled") or st.get("message_id") is None:
+            return False
+        bot = st.get("bot")
+        chat_id = st.get("chat_id")
+        message_id = st.get("message_id")
+        if bot is None or chat_id is None or message_id is None:
+            return False
+
+        try:
+            from telegram.error import BadRequest, RetryAfter  # PTB
+        except Exception:
+            st["disabled"] = True
+            return False
+
+        def _strike(reason: str) -> None:
+            st["flood_strikes"] = int(st.get("flood_strikes", 0)) + 1
+            if st["flood_strikes"] >= 3:
+                st["disabled"] = True
+                logger.info("Telegram live preview disabled after 3 strikes (%s)", reason)
+
+        html_body = _markdownish_to_html(body)
+        for attempt in range(2):  # at most one inline RetryAfter retry
+            try:
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    text=html_body,
+                    parse_mode="HTML",
+                )
+                st["flood_strikes"] = 0
+                return True
+            except RetryAfter as e:
+                wait = float(getattr(e, "retry_after", 0.0) or 0.0)
+                if wait <= 5.0 and attempt == 0:
+                    logger.debug("Telegram RetryAfter %.1fs — sleeping and retrying once", wait)
+                    await asyncio.sleep(max(wait, 0.1))
+                    continue
+                _strike(f"RetryAfter {wait:.1f}s")
+                return False
+            except BadRequest as e:
+                emsg = str(e).lower()
+                if "message is not modified" in emsg:
+                    st["flood_strikes"] = 0
+                    return True
+                if "parse" in emsg or "entity" in emsg or "tag" in emsg:
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=message_id,
+                            text=body,
+                            parse_mode=None,
+                        )
+                        st["flood_strikes"] = 0
+                        return True
+                    except Exception as ex2:
+                        logger.debug("Telegram plain-text fallback failed: %s", ex2)
+                        _strike(f"plain fallback: {ex2}")
+                        return False
+                _strike(f"BadRequest: {e}")
+                return False
+            except Exception as e:
+                logger.debug("Telegram edit failed: %s", e)
+                _strike(str(e))
+                return False
+        return False
+
+    async def _live_split_and_roll(self, st: dict, text: str) -> None:
+        """Overflow path: edit current message with head, open a new message for tail."""
+        limit = _TG_LIVE_MAX_PREVIEW
+        cut = text.rfind("\n", 0, limit)
+        if cut < limit // 2:  # no clean newline near the boundary — hard cut
+            cut = limit
+        head = text[:cut].rstrip()
+        tail = text[cut:].lstrip("\n")
+        if not tail:
+            await self._safe_edit_text(st, head)
+            return
+
+        await self._safe_edit_text(st, head)
+        if st.get("disabled"):
+            return
+
+        bot = st.get("bot")
+        chat_id = st.get("chat_id")
+        if bot is None or chat_id is None:
+            return
+        new_msg_id: Optional[int] = None
+        try:
+            msg = await bot.send_message(
+                chat_id=chat_id,
+                text=_markdownish_to_html(tail),
+                parse_mode="HTML",
+            )
+            new_msg_id = msg.message_id
+        except Exception as exc:
+            logger.debug("Telegram split send (HTML) failed: %s — retrying plain", exc)
+            try:
+                msg = await bot.send_message(chat_id=chat_id, text=tail)
+                new_msg_id = msg.message_id
+            except Exception as exc2:
+                logger.debug("Telegram split send (plain) also failed: %s", exc2)
+                return
+
+        if new_msg_id is None:
+            return
+        st["message_id"] = new_msg_id
+        st["lines"] = [tail]
+        st["pending"] = tail
+        st["pending_for_edit"] = tail
+
     async def _live_flush_immediate(self, st: dict) -> None:
-        """Push accumulated tool lines to Telegram (plain text). Safe to call after debounce cancel."""
+        """Push accumulated tool lines to Telegram. Safe to call after debounce cancel."""
+        if st.get("disabled"):
+            return
         text = (st.get("pending_for_edit") or "").strip() or (st.get("pending") or "").strip()
         if not text or st.get("message_id") is None:
             return
+        if len(text) > _TG_LIVE_MAX_PREVIEW:
+            await self._live_split_and_roll(st, text)
+            return
         body = text if len(text) <= _TG_TEXT_LIMIT else text[: _TG_TEXT_LIMIT - 8] + "\n…(trimmed)"
+        await self._safe_edit_text(st, body)
+
+    async def _finalize_consumer(self, consumer, consumer_task) -> None:
+        """Signal the streaming consumer to flush + drain its task."""
+        if consumer is None or consumer_task is None:
+            return
         try:
-            await st["bot"].edit_message_text(
-                chat_id=st["chat_id"],
-                message_id=st["message_id"],
-                text=body,
-            )
+            consumer.finish()
         except Exception as exc:
-            emsg = str(exc).lower()
-            if "message is not modified" in emsg:
-                return
-            logger.debug("Telegram live preview edit failed: %s", exc)
+            logger.debug("consumer.finish() raised: %s", exc)
+        try:
+            await asyncio.wait_for(consumer_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            logger.debug("consumer drain timed out — cancelling")
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.debug("consumer drain failed: %s", exc)
+
+    @staticmethod
+    def _final_target_st(live_st: Optional[dict], consumer) -> Optional[dict]:
+        """Pick the message-id the final reply should overwrite.
+
+        If the streaming consumer ran without being disabled and rolled
+        the live message id forward (overflow split, post-tool fresh
+        message), return a small dict pointing at *that* message — the
+        delivery code will edit it with the canonical reply text. Falls
+        back to ``live_st`` (the original placeholder) when streaming
+        produced nothing useful.
+        """
+        if consumer is None:
+            return live_st
+        if getattr(consumer, "disabled", False):
+            return live_st
+        cmid = getattr(consumer, "message_id", None)
+        if cmid is None or live_st is None:
+            return live_st
+        return {
+            "chat_id": live_st["chat_id"],
+            "message_id": cmid,
+            "bot": live_st.get("bot"),
+        }
 
     async def _cancel_live_debounce(self, st: dict) -> None:
         t = st.get("debounce_task")
@@ -531,17 +685,31 @@ class TelegramChannel(BaseChannel):
                         f"'{raw}' isn't a valid IANA zone. Try e.g. Asia/Riyadh, or say 'skip'."
                     )
                     return True
+            w["timezone"] = tz_value
+            w["step"] = "awaiting_city"
+            await update.message.reply_text(
+                "Last one — what city are you usually in? (e.g. Riyadh, London, New York)\n"
+                "I'll use it for weather, local time, and 'near me' queries so I don't have "
+                "to keep asking. Reply 'skip' if you'd rather I ask each time."
+            )
+            return True
+
+        if step == "awaiting_city":
+            raw = text.strip()
+            city_value = "" if raw.lower() in {"skip", "-", "none", ""} else raw[:80]
             self.agent.principals.update(
                 principal_id,
                 preferred_name=w.get("name", ""),
-                timezone=tz_value,
+                timezone=w.get("timezone", ""),
+                city=city_value,
                 onboarded=True,
             )
             self._wizard_state.pop(user_id, None)
             state = self.agent.principals.get(principal_id)
-            tz_note = f" Timezone: {tz_value}." if tz_value else " Using server-local time."
+            tz_note = f" Timezone: {state.timezone}." if state.timezone else " Using server-local time."
+            city_note = f" City: {state.city}." if state.city else ""
             await update.message.reply_text(
-                f"✅ You're set up, {state.preferred_name}.{tz_note}\n\n"
+                f"✅ You're set up, {state.preferred_name}.{tz_note}{city_note}\n\n"
                 "I'm time-aware and remember who you are across conversations. "
                 "High-risk actions will ask for your approval before running."
             )
@@ -716,6 +884,8 @@ class TelegramChannel(BaseChannel):
         import time as _time
 
         live_st: Optional[dict] = None
+        consumer = None
+        consumer_task: Optional[asyncio.Task] = None
         if _env_telegram_live_enabled() and self._loop and self._app:
             try:
                 pm = await context.bot.send_message(
@@ -730,23 +900,40 @@ class TelegramChannel(BaseChannel):
                     "debounce_s": _env_telegram_live_debounce_s(),
                     "lines": [],
                     "debounce_task": None,
+                    "flood_strikes": 0,
+                    "disabled": False,
                 }
+                from agi_runtime.channels.telegram_stream import TelegramStreamConsumer
+                consumer = TelegramStreamConsumer(
+                    bot=context.bot,
+                    chat_id=int(chat_id),
+                    message_id=pm.message_id,
+                    loop=self._loop,
+                )
+                consumer_task = asyncio.create_task(consumer.run())
             except Exception as ex:
                 logger.debug("Telegram live preview placeholder send failed: %s", ex)
 
+        original_on_stream = self.agent.on_stream
         original_on_tool_start = self.agent.on_tool_start
         original_on_tool_end = self.agent.on_tool_end
-        if live_st and self._loop is not None:
-            ploop = self._loop
-
+        if live_st and consumer is not None and self._loop is not None:
+            # Tool boundaries flow as text deltas into the same streamed
+            # message — one growing transcript per turn, not a new message
+            # per tool. The cursor ▉ stays at the bottom while in-flight.
             def on_tool_start(name, input_data, decision):
-                line = self._format_tool_progress_start(name, decision)
-                self._schedule_live_preview_fragment(live_st, line, ploop)
+                if consumer is not None:
+                    consumer.on_delta(
+                        "\n\n" + self._format_tool_progress_start(name, decision) + "\n"
+                    )
 
             def on_tool_end(name, ok, output):
-                line = self._format_tool_progress_end(name, ok)
-                self._schedule_live_preview_fragment(live_st, line, ploop)
+                if consumer is not None:
+                    consumer.on_delta(
+                        self._format_tool_progress_end(name, ok) + "\n"
+                    )
 
+            self.agent.on_stream = consumer.on_delta
             self.agent.on_tool_start = on_tool_start
             self.agent.on_tool_end = on_tool_end
 
@@ -779,6 +966,8 @@ class TelegramChannel(BaseChannel):
 
             response_text = r.text if not meta_line else f"{meta_line}\n\n{r.text}"
 
+            # Drain any remaining streamed deltas before we finalize the reply.
+            await self._finalize_consumer(consumer, consumer_task)
             if live_st and live_st.get("message_id") is not None:
                 await self._cancel_live_debounce(live_st)
 
@@ -786,10 +975,15 @@ class TelegramChannel(BaseChannel):
             if len(response_text) > 4000:
                 response_text = response_text[:4000] + "\n\n...truncated"
 
-            await self._deliver_telegram_response(update, context, response_text, live_st)
+            # If the consumer rolled the live preview onto a newer message
+            # (overflow split, segment break for tools), edit that one with
+            # the canonical reply text rather than the original placeholder.
+            target_st = self._final_target_st(live_st, consumer)
+            await self._deliver_telegram_response(update, context, response_text, target_st)
 
         except asyncio.TimeoutError:
             logger.warning("Telegram handler: think() exceeded 600s")
+            await self._finalize_consumer(consumer, consumer_task)
             if live_st and live_st.get("message_id") is not None:
                 try:
                     await self._cancel_live_debounce(live_st)
@@ -807,6 +1001,7 @@ class TelegramChannel(BaseChannel):
             await update.message.reply_text(err)
         except Exception as e:
             logger.error(f"Error handling message: {e}")
+            await self._finalize_consumer(consumer, consumer_task)
             if live_st and live_st.get("message_id") is not None:
                 try:
                     await self._cancel_live_debounce(live_st)
@@ -830,6 +1025,7 @@ class TelegramChannel(BaseChannel):
                 pass
             self._inflight_by_principal.pop(principal_id, None)
             self.agent.on_user_input = original_input
+            self.agent.on_stream = original_on_stream
             self.agent.on_tool_start = original_on_tool_start
             self.agent.on_tool_end = original_on_tool_end
             if live_st and live_st.get("debounce_task") is not None:
@@ -839,6 +1035,17 @@ class TelegramChannel(BaseChannel):
                     try:
                         await tsk
                     except asyncio.CancelledError:
+                        pass
+            if consumer_task is not None and not consumer_task.done():
+                try:
+                    if consumer is not None:
+                        consumer.finish()
+                    await asyncio.wait_for(consumer_task, timeout=2.0)
+                except Exception:
+                    consumer_task.cancel()
+                    try:
+                        await consumer_task
+                    except Exception:
                         pass
 
     async def _typing_keepalive(self, bot, chat_id: int):

@@ -55,12 +55,37 @@ from agi_runtime.intelligence.sentiment import SentimentTracker
 from agi_runtime.intelligence.context_compiler import ContextCompiler
 from agi_runtime.intelligence.patterns import PatternDetector
 from agi_runtime.policies.packs import get_pack
+from agi_runtime.cognition.router import CognitiveRouter
+from agi_runtime.cognition.risk import RiskScorer
+from agi_runtime.cognition.system1 import (
+    ExpertOverrides,
+    prepare_expert_overrides,
+)
+from agi_runtime.cognition.feedback import OutcomeRecorder
+from agi_runtime.cognition.stall import (
+    StallDetector,
+    build_reminder as build_stall_reminder,
+    detector_from_config as stall_detector_from_config,
+)
 
 try:
     import anthropic as _anthropic_lib
     _ANTHROPIC_AVAILABLE = True
 except ImportError:
     _ANTHROPIC_AVAILABLE = False
+
+
+def _posture_name_from_risk(risk: float) -> str:
+    """Mirror governance.posture._posture_from_risk without re-running SRG.
+
+    Avoids a second governor.evaluate() call inside _think_async — the agent
+    already has gov.risk in hand at the routing point.
+    """
+    if risk >= 0.35:
+        return "conservative"
+    if risk >= 0.15:
+        return "balanced"
+    return "aggressive"
 
 
 @dataclass
@@ -71,6 +96,12 @@ class AgentResponse:
     risk: float
     tool_calls_made: int = 0
     turns_used: int = 0
+    # Whether the underlying think loop completed cleanly. Outcome reporting
+    # (e.g. cognition.feedback.OutcomeRecorder) reads this to decide whether
+    # to credit or debit the matched skill. Failure paths (LLM error, soft
+    # timeout, recovery exhausted) flip this to False.
+    success: bool = True
+    failure_reason: str = ""
 
 
 @dataclass
@@ -132,6 +163,62 @@ class HelloAGIAgent:
         self.context_compiler = ContextCompiler()
         self.patterns = PatternDetector()
         self.max_turns = self.policy_pack.max_turns
+
+        # Cognitive runtime — dual-system router. Defaults to observe-only,
+        # so behavior is unchanged unless cognitive_runtime.enabled=True.
+        cog_cfg = self.settings.cognitive_runtime if isinstance(
+            self.settings.cognitive_runtime, dict
+        ) else {}
+        self.cognitive_router = CognitiveRouter(
+            skills=self.skills,
+            journal=self.journal,
+            risk_scorer=RiskScorer(circuit_breaker=self.circuit_breaker),
+            config=cog_cfg,
+        )
+        # System 2 trace store + per-agent weights are cheap to allocate
+        # even when the council never fires — they own filesystem state
+        # callers (e.g. tests, dashboards) may want to inspect.
+        from agi_runtime.cognition.trace import ThinkingTraceStore as _TraceStore
+        from agi_runtime.cognition.system2.voting import VoteWeights as _VoteWeights
+        from agi_runtime.cognition.crystallize import SkillCrystallizer as _Crystallizer
+        self.thinking_trace_store = _TraceStore(journal=self.journal)
+        self.vote_weights = _VoteWeights()
+        # Crystallization gate values come from the same config block the
+        # router reads — keeps a single source of truth for thresholds.
+        cryst_cfg = (
+            cog_cfg.get("crystallization", {}) if isinstance(cog_cfg, dict) else {}
+        )
+        skill_bank = getattr(self.skills, "skill_bank", None) or getattr(
+            self.skills, "bank", None
+        )
+        self.skill_crystallizer = _Crystallizer(
+            trace_store=self.thinking_trace_store,
+            skill_bank=skill_bank,
+            journal=self.journal,
+            min_council_successes=int(
+                cryst_cfg.get("min_council_successes", 3) if isinstance(cryst_cfg, dict) else 3
+            ),
+            min_agent_agreement=float(
+                cryst_cfg.get("min_agent_agreement", 0.66) if isinstance(cryst_cfg, dict) else 0.66
+            ),
+        )
+        self.outcome_recorder = OutcomeRecorder(
+            skills=self.skills,
+            journal=self.journal,
+            trace_store=self.thinking_trace_store,
+            vote_weights=self.vote_weights,
+            crystallizer=self.skill_crystallizer,
+        )
+        # Lazy — built only on the first System 2 dispatch, since it needs
+        # the Anthropic client which is set later in __init__.
+        self._cognitive_council = None
+        # Most recent routing decision, exposed for diagnostics.
+        self._last_routing_decision = None
+        # Active System 1 override for the duration of one think() call.
+        # Set in _think_async, cleared in the finally block.
+        self._active_expert_overrides: Optional[ExpertOverrides] = None
+        # Active System 2 trace for the duration of one think() call.
+        self._active_council_trace = None
 
         # Initialize tool registry and discover all builtin tools
         self.tool_registry = ToolRegistry.get_instance()
@@ -504,6 +591,20 @@ class HelloAGIAgent:
         parts.append(time_block)
         parts.append("</time-context>")
 
+        # Grounded location — populated by the onboarding wizard. When the
+        # user has set a city, weather / "near me" / local-services queries
+        # should not need a clarifying web_search loop.
+        principal_city = (getattr(principal_state, "city", "") or "").strip()
+        if principal_city:
+            parts.append("")
+            parts.append("<location-context>")
+            parts.append(
+                f"User's reported city: {principal_city}. Treat this as the "
+                "default location for weather, local time, 'near me', and "
+                "place-based queries unless the user names a different place."
+            )
+            parts.append("</location-context>")
+
         active_task = self._build_active_task_section()
         if active_task:
             parts.append("")
@@ -812,13 +913,15 @@ class HelloAGIAgent:
 
         for turn in range(sub_max):
             try:
-                response = self._claude.messages.create(
+                on_stream = self.on_stream
+                with self._claude.messages.stream(
                     model="claude-haiku-4-5-20251001",  # Use fast model for sub-agents
                     max_tokens=4096,
                     system=sub_system,
                     tools=tools,
                     messages=sub_history,
-                )
+                ) as stream:
+                    response = self._drain_anthropic_stream(stream, on_stream)
             except Exception as e:
                 return f"Sub-agent LLM error: {e}"
 
@@ -884,6 +987,49 @@ class HelloAGIAgent:
 
         return f"Sub-agent completed {sub_max} turns on: {goal}"
 
+    # ── Anthropic streaming helper ─────────────────────────────
+
+    def _drain_anthropic_stream(self, stream, on_stream):
+        """Drain a ``messages.stream()`` context, emitting deltas via ``on_stream``.
+
+        ``on_stream`` is invoked with each text delta string as it arrives.
+        It is also called with ``None`` at the start of every tool_use block to
+        signal a segment break (so channels can finalize the in-flight message
+        and start a fresh one for the next reasoning chunk). All callback
+        exceptions are journaled and swallowed so they can never break the
+        underlying SDK stream.
+
+        Returns the final ``Message`` (same shape as ``messages.create()``).
+        """
+        for event in stream:
+            try:
+                etype = getattr(event, "type", "")
+                if etype == "content_block_delta":
+                    delta = getattr(event, "delta", None)
+                    if delta is not None and getattr(delta, "type", "") == "text_delta":
+                        txt = getattr(delta, "text", "") or ""
+                        if on_stream and txt:
+                            try:
+                                on_stream(txt)
+                            except Exception as exc:
+                                self.journal.write(
+                                    "on_stream_error", {"error": str(exc)[:300]}
+                                )
+                elif etype == "content_block_start":
+                    blk = getattr(event, "content_block", None)
+                    if blk is not None and getattr(blk, "type", "") == "tool_use":
+                        if on_stream:
+                            try:
+                                on_stream(None)
+                            except Exception as exc:
+                                self.journal.write(
+                                    "on_stream_error", {"error": str(exc)[:300]}
+                                )
+            except Exception as exc:
+                # Never let event parsing kill the stream loop.
+                self.journal.write("stream_event_error", {"error": str(exc)[:300]})
+        return stream.get_final_message()
+
     # ── Main Think Loop ────────────────────────────────────────
 
     def think(self, user_input: str) -> AgentResponse:
@@ -938,6 +1084,27 @@ class HelloAGIAgent:
             self.journal.write("cache_hit", {"text": cached[:200]})
             return AgentResponse(text=cached, decision=gov.decision, risk=gov.risk)
 
+        # 3b. Cognitive routing.
+        # Observe-only by default; once cognitive_runtime.enabled=True and
+        # mode is "system1_only" or "dual", an enforced System 1 verdict
+        # routes through Haiku via _active_expert_overrides. In "dual" mode
+        # an enforced System 2 verdict invokes the AgentCouncil before the
+        # main loop runs.
+        try:
+            posture_name = _posture_name_from_risk(float(gov.risk or 0.0))
+            self._last_routing_decision = self.cognitive_router.decide(
+                user_input, gov, posture_name=posture_name,
+            )
+            self._active_expert_overrides = prepare_expert_overrides(
+                self._last_routing_decision
+            )
+        except Exception:
+            # Routing must never break the agent.
+            self._last_routing_decision = None
+            self._active_expert_overrides = None
+        self._active_council_trace = None
+        council_outcome = await self._maybe_run_council(user_input, gov)
+
         # 4. No usable LLM backbone (see HELLOAGI_LLM_PROVIDER + API keys)
         if self._llm_provider is None:
             text = self._template_response(user_input, gov)
@@ -951,16 +1118,63 @@ class HelloAGIAgent:
             bootstrap_instruction=bootstrap_instruction,
             profile_excerpt=profile_excerpt,
         )
+        if self._active_expert_overrides is not None:
+            system_prompt = (
+                system_prompt + "\n\n" + self._active_expert_overrides.prompt_addendum
+            )
+
+        if council_outcome is not None:
+            addendum = self._council_addendum(council_outcome)
+            if addendum:
+                system_prompt = system_prompt + addendum
+
+        # Surface task-scoped tool hints from PatternDetector so the agent
+        # sees "last time you asked about Instagram followers you used the
+        # browser" before it grinds through ad-hoc tool calls. Cheap signal,
+        # high payoff for the floundering-on-familiar-topic failure mode.
+        try:
+            scoped = self.patterns.get_tools_for_topic(user_input, top_n=3, min_uses=2)
+        except Exception:
+            scoped = []
+        if scoped:
+            hint_lines = ", ".join(f"{t} ({c}×)" for t, c in scoped)
+            system_prompt = (
+                system_prompt
+                + "\n\n<task-pattern-hint>\n"
+                + f"Past tasks with overlapping topics most often used: {hint_lines}.\n"
+                + "Reach for these tools first if they fit the goal — don't reinvent the path.\n"
+                + "</task-pattern-hint>"
+            )
 
         rel_cfg = self.settings.reliability if isinstance(self.settings.reliability, dict) else {}
         to_sec = int(rel_cfg.get("soft_timeout_sec", 0) or 0)
         self._think_soft_deadline = (time.time() + float(to_sec)) if to_sec > 0 else None
+        expert = self._active_expert_overrides
+        council_trace = self._active_council_trace
         try:
             if self._llm_provider == "anthropic":
-                return await self._think_async_claude(user_input, gov, tools, system_prompt, principal_id)
-            return await self._think_async_gemini(user_input, gov, tools, system_prompt, principal_id)
+                response = await self._think_async_claude(user_input, gov, tools, system_prompt, principal_id)
+            else:
+                response = await self._think_async_gemini(user_input, gov, tools, system_prompt, principal_id)
+            if expert is not None:
+                self.outcome_recorder.record_system1(
+                    expert,
+                    success=response.success,
+                    failure_reason=response.failure_reason,
+                )
+                self.cognitive_router.observe_outcome(expert.fingerprint)
+            if council_trace is not None:
+                self.outcome_recorder.record_system2(
+                    council_trace,
+                    success=response.success,
+                    failure_reason=response.failure_reason,
+                )
+                self.cognitive_router.observe_outcome(council_trace.fingerprint)
+            return response
         finally:
             self._think_soft_deadline = None
+            self._active_expert_overrides = None
+            self._active_council_trace = None
 
     def _tail_history_for_synthesis(self, max_messages: int = 48) -> List[dict]:
         """Last N history entries to stay within model limits while keeping recent tool context."""
@@ -989,12 +1203,14 @@ class HelloAGIAgent:
             {"role": "user", "content": self._synthesis_nudge_user_content(user_input)},
         ]
         try:
-            response = self._claude.messages.create(
+            on_stream = self.on_stream
+            with self._claude.messages.stream(
                 model=self._select_model(user_input),
                 max_tokens=min(8192, self.MAX_OUTPUT_TOKENS),
                 system=system_prompt,
                 messages=messages,
-            )
+            ) as stream:
+                response = self._drain_anthropic_stream(stream, on_stream)
         except Exception as e:
             self.journal.write("synthesis_after_max_turns", {"ok": False, "provider": "anthropic", "error": str(e)[:500]})
             return ""
@@ -1138,6 +1354,18 @@ class HelloAGIAgent:
             self.loop_breaker.reset(principal_id)
             self.recovery_manager.reset(principal_id)
 
+        # Per-call stall detector. Catches "N silent tool-only turns" so we
+        # don't burn 40 turns on the kind of floundering that triggered
+        # this whole effort.
+        cog_cfg = (
+            self.settings.cognitive_runtime
+            if isinstance(self.settings.cognitive_runtime, dict)
+            else {}
+        )
+        stall_cfg = cog_cfg.get("stall") if isinstance(cog_cfg, dict) else None
+        stall_enabled = bool((stall_cfg or {}).get("enabled", True))
+        stall_detector = stall_detector_from_config(cog_cfg)
+
         for turn in range(self.max_turns):
             turns_used = turn + 1
 
@@ -1156,6 +1384,8 @@ class HelloAGIAgent:
                     risk=gov.risk,
                     tool_calls_made=total_tool_calls,
                     turns_used=turns_used,
+                    success=False,
+                    failure_reason="soft_timeout",
                 )
 
             if self.reliability_enabled:
@@ -1168,26 +1398,30 @@ class HelloAGIAgent:
                         self.journal.write("recovery_exhausted", {})
                         return AgentResponse(
                             text=action.instruction, decision=gov.decision, risk=gov.risk,
-                            tool_calls_made=total_tool_calls, turns_used=turns_used
+                            tool_calls_made=total_tool_calls, turns_used=turns_used,
+                            success=False, failure_reason="recovery_exhausted",
                         )
                     else:
                         self._history.append({"role": "user", "content": action.instruction})
                         self.journal.write("loop_broken", {"strategy": action.strategy})
 
             try:
-                response = self._claude.messages.create(
+                on_stream = self.on_stream
+                with self._claude.messages.stream(
                     model=self._select_model(user_input),
                     max_tokens=self.MAX_OUTPUT_TOKENS,
                     system=system_prompt,
                     tools=tools,
                     messages=self._history,
-                )
+                ) as stream:
+                    response = self._drain_anthropic_stream(stream, on_stream)
             except Exception as e:
                 error_msg = f"LLM call failed: {e}"
                 self.journal.write("llm_error", {"error": str(e), "turn": turn})
                 return AgentResponse(
                     text=error_msg, decision=gov.decision, risk=gov.risk,
                     tool_calls_made=total_tool_calls, turns_used=turns_used,
+                    success=False, failure_reason=f"llm_error:{type(e).__name__}",
                 )
 
             text_parts = []
@@ -1206,6 +1440,13 @@ class HelloAGIAgent:
                     self.journal.write("thinking", {"text": getattr(block, 'thinking', '')[:500]})
 
             self._history.append({"role": "assistant", "content": response.content})
+
+            # Stall observation — record this turn's narration vs. tool-call
+            # ratio so we can detect "the agent is just spamming tools."
+            stall_detector.observe(
+                text_chars=len("\n".join(text_parts)),
+                tool_call_count=len(tool_calls),
+            )
 
             if not tool_calls:
                 final_text = "\n".join(text_parts)
@@ -1418,6 +1659,25 @@ class HelloAGIAgent:
 
             self._history.append({"role": "user", "content": tool_results})
 
+            # Stall escalation — if we've had N silent tool-only turns in a
+            # row, inject a warning user message asking the LLM to summarize
+            # what it's tried and consider switching approach. Fire-once per
+            # streak; resets when the agent narrates again.
+            if stall_enabled:
+                stall_signal = stall_detector.check()
+                if stall_signal.detected:
+                    self.journal.write("system.stall_detected", {
+                        "tool_calls": stall_signal.total_tool_calls,
+                        "silent_turns": stall_signal.consecutive_silent_turns,
+                        "turn": turns_used,
+                        "reason": stall_signal.reason,
+                    })
+                    self._history.append({
+                        "role": "user",
+                        "content": build_stall_reminder(stall_signal),
+                    })
+                    stall_detector.acknowledge()
+
             if self.compressor.needs_compression(self._history):
                 self._history = await self.compressor.compress(self._history)
                 self.journal.write("context_compressed", {"new_length": len(self._history)})
@@ -1435,9 +1695,15 @@ class HelloAGIAgent:
                 f"{backup}\n\n"
                 f"I could not generate a final summary. Try a narrower question, or rephrase and ask again."
             )
+        # Reaching max_turns without a tool-free synthesis turn is a failure
+        # signal even if we managed to stitch together a summary. The user's
+        # follower-count complaint is the canonical example: 40 turns spent
+        # floundering instead of "this is browser work — open the profile."
         return AgentResponse(
             text=final_text, decision=gov.decision, risk=gov.risk,
             tool_calls_made=total_tool_calls, turns_used=turns_used,
+            success=bool(summary),
+            failure_reason="max_turns_reached" if not summary else "",
         )
 
     async def _gemini_generate_with_resilience(
@@ -1577,7 +1843,8 @@ class HelloAGIAgent:
                         self.journal.write("recovery_exhausted", {})
                         return AgentResponse(
                             text=action.instruction, decision=gov.decision, risk=gov.risk,
-                            tool_calls_made=total_tool_calls, turns_used=turns_used
+                            tool_calls_made=total_tool_calls, turns_used=turns_used,
+                            success=False, failure_reason="recovery_exhausted",
                         )
                     else:
                         self._history.append({"role": "user", "content": action.instruction})
@@ -1896,11 +2163,108 @@ class HelloAGIAgent:
         return response in ("y", "yes", "approve", "ok")
 
     def _select_model(self, user_input: str) -> str:
-        """Select the appropriate Claude model based on task complexity."""
+        """Select the appropriate Claude model based on task complexity.
+
+        When an enforced System 1 override is active for this think(), force
+        Haiku regardless of keyword heuristics — that's the whole point of
+        Expert Mode.
+        """
+        if self._active_expert_overrides is not None:
+            return self._active_expert_overrides.model_id
         from agi_runtime.models.router import ModelRouter
         router = ModelRouter()
         decision = router.route(user_input)
         return decision.model
+
+    def _ensure_cognitive_council(self):
+        """Build the Agent Council on first use.
+
+        Returns the council or None if it can't be built (no Claude client,
+        configuration disabled, instantiation failed). Callers must handle
+        ``None`` — the agent must keep working when the council can't run.
+        """
+        if self._cognitive_council is not None:
+            return self._cognitive_council
+        if self._claude is None:
+            return None
+        try:
+            from agi_runtime.cognition.system2 import (
+                AgentCouncil,
+                make_default_roster,
+            )
+            cog_cfg = (
+                self.settings.cognitive_runtime
+                if isinstance(self.settings.cognitive_runtime, dict)
+                else {}
+            )
+            council_cfg = cog_cfg.get("council") if isinstance(cog_cfg, dict) else None
+            council_cfg = council_cfg or {}
+            agents = make_default_roster(client=self._claude)
+            self._cognitive_council = AgentCouncil(
+                agents=agents,
+                weights=self.vote_weights,
+                trace_store=self.thinking_trace_store,
+                max_rounds=int(council_cfg.get("max_rounds", 2) or 2),
+                journal=self.journal,
+            )
+            return self._cognitive_council
+        except Exception as e:
+            self.journal.write("council.build_failed", {"error": str(e)[:200]})
+            return None
+
+    async def _maybe_run_council(
+        self, user_input: str, gov: GovernanceResult
+    ):
+        """If routing says System 2 in dual mode, run the council.
+
+        Returns the ``CouncilOutcome`` or None. Stores the trace on
+        ``self._active_council_trace`` so the post-loop hook can record
+        the verified outcome.
+        """
+        decision = self._last_routing_decision
+        if decision is None or not getattr(decision, "enforced", False):
+            return None
+        if getattr(decision, "system", "") != "system2":
+            return None
+        # Council only fires in dual mode — system1_only routes system2
+        # decisions back through the default loop without deliberation.
+        if getattr(decision, "mode", "") != "dual":
+            return None
+        council = self._ensure_cognitive_council()
+        if council is None:
+            return None
+        try:
+            outcome = council.deliberate(
+                user_input=user_input,
+                fingerprint=getattr(decision, "fingerprint", "") or "",
+                srg_decision={
+                    "decision": gov.decision,
+                    "risk": gov.risk,
+                    "reasons": list(getattr(gov, "reasons", []) or []),
+                },
+            )
+        except Exception as e:
+            self.journal.write("council.deliberate_failed", {"error": str(e)[:200]})
+            return None
+        self._active_council_trace = outcome.trace
+        return outcome
+
+    def _council_addendum(self, outcome) -> str:
+        """Format the council's decision as a system-prompt block."""
+        decision = (outcome.final_decision or "").strip()
+        summary = (outcome.reasoning_summary or "").strip()
+        if not decision or decision == "no_decision":
+            return ""
+        return (
+            "\n\n<council-decision>\n"
+            "A reasoning council deliberated on this task. Their conclusion:\n"
+            f"  Decision: {decision}\n"
+            f"  Reasoning: {summary}\n"
+            "Treat this as senior guidance — execute it with the available tools "
+            "unless you have a strong, specific reason to deviate. Do not "
+            "re-debate the choice; the council already did.\n"
+            "</council-decision>"
+        )
 
     def _get_tool_schemas(self) -> List[dict]:
         """Get Claude-format tool schemas for all available tools."""

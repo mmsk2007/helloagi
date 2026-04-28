@@ -20,6 +20,7 @@ class PrincipalState:
     primary_goals: str = ""
     boundaries: str = ""
     timezone: str = ""
+    city: str = ""
     onboarded: bool = False
 
 

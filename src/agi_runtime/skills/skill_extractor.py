@@ -100,6 +100,124 @@ class SkillExtractor:
         skill.compute_risk_level()
         return skill
 
+    def extract_from_council_trace(
+        self,
+        trace,
+        *,
+        agreement: Optional[float] = None,
+    ) -> Optional[SkillContract]:
+        """Build a SkillContract candidate from a successful council trace.
+
+        Phase 4 promotion path — System 2 trains System 1. We pull:
+          - the synthesizer's ``final_decision`` as the canonical
+            execution recipe
+          - the union of all agents' ``suggested_tools`` as
+            ``tools_required``
+          - the council's ``reasoning_summary`` as the success criterion
+          - the trace's ``fingerprint`` so the next router lookup hits
+            this skill in O(1)
+          - ``council_origin_trace_id`` as provenance
+
+        ``agreement`` (0-1) seeds the initial confidence score: a 100%
+        consensus run gets a higher floor than a tie-broken one. Falls
+        back to a default if not provided.
+
+        Returns None if the trace is empty or the decision is not usable
+        (no rounds, ``no_decision``, or no recovered tool list).
+        """
+        if trace is None:
+            return None
+        rounds = list(getattr(trace, "rounds", []) or [])
+        decision = (getattr(trace, "final_decision", "") or "").strip()
+        if not rounds or not decision or decision == "no_decision":
+            return None
+
+        # Pull tool hints from every agent in every round; dedupe in order.
+        tools = self._council_tools(rounds)
+
+        execution_steps = self._council_steps(decision)
+        if len(execution_steps) < 1:
+            return None
+
+        goal = (getattr(trace, "user_input", "") or "").strip() or decision
+        name = self._derive_name(goal)
+        success_criteria = []
+        summary = (getattr(trace, "reasoning_summary", "") or "").strip()
+        if summary:
+            success_criteria.append(summary)
+        success_criteria.append("Council deliberation produced a verified pass.")
+
+        seed_conf = self._seed_confidence(agreement)
+
+        skill = SkillContract(
+            name=name,
+            description=f"Council-derived skill for: {goal[:200]}",
+            task_type=self._infer_task_type(tools),
+            preconditions=[f"Task matches: {goal[:100]}"],
+            execution_steps=execution_steps,
+            tools_required=tools,
+            success_criteria=success_criteria,
+            triggers=self._extract_triggers(goal),
+            tags=self._extract_tags(goal, tools),
+            task_fingerprint=getattr(trace, "fingerprint", "") or "",
+            council_origin_trace_id=getattr(trace, "trace_id", "") or "",
+            status="candidate",
+            confidence_score=seed_conf,
+        )
+        skill.compute_risk_level()
+        return skill
+
+    @staticmethod
+    def _council_tools(rounds) -> list:
+        """Walk debate rounds and collect a deduped tool list.
+
+        Phase 3 council outputs don't expose suggested_tools per turn in
+        ``DebateRound`` directly (votes/outputs are persisted), so we mine
+        the freeform outputs for tool-name-looking tokens. Cheap and good
+        enough — Phase 5 may persist suggested_tools explicitly.
+        """
+        all_text = []
+        for r in rounds:
+            for output in getattr(r, "agent_outputs", {}).values():
+                if output:
+                    all_text.append(str(output))
+        text = "\n".join(all_text).lower()
+        candidates = [
+            "browser_navigate", "browser_click", "browser_type",
+            "browser_screenshot", "browser_exec_js",
+            "web_search", "web_fetch",
+            "file_read", "file_write", "file_patch", "file_search",
+            "bash_exec", "python_exec",
+            "memory_store", "memory_recall",
+            "send_file_tool", "delegate_task",
+        ]
+        return [c for c in candidates if c in text]
+
+    @staticmethod
+    def _council_steps(decision: str) -> list:
+        """Split the synthesizer's decision into actionable steps."""
+        if not decision:
+            return []
+        # Synthesizer prompts ask for short outputs; treat ; or newline as
+        # step separators. Strip blank fragments.
+        for sep in ("\n", ";"):
+            if sep in decision:
+                pieces = [p.strip(" -•") for p in decision.split(sep)]
+                steps = [p for p in pieces if p]
+                if steps:
+                    return steps[:15]
+        # Single-step decision is fine — many real plans are one move.
+        return [decision]
+
+    @staticmethod
+    def _seed_confidence(agreement: Optional[float]) -> float:
+        """Map inter-agent agreement to a starting confidence score."""
+        if agreement is None:
+            return 0.6
+        a = max(0.0, min(1.0, float(agreement)))
+        # 0.66 (the floor for crystallization) → 0.55; 1.0 → 0.7.
+        return round(0.55 + 0.15 * (a - 0.66) / max(0.34, 1.0 - 0.66), 3)
+
     def _derive_name(self, goal: str) -> str:
         """Create a concise skill name from a goal description."""
         # Take first meaningful phrase, max 50 chars

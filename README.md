@@ -1,9 +1,12 @@
 <p align="center">
-  <h1 align="center">HelloAGI</h1>
-  <p align="center">
-    <strong>An open-source governed autonomy runtime.</strong><br>
-    <em>Not another chatbot wrapper. A practical agent runtime that can think, act, learn, and grow — with deterministic safety gates that prompt injection cannot bypass.</em>
-  </p>
+  <img src="docs/assets/HelloAGI.png" alt="HelloAGI" width="220">
+</p>
+
+<h1 align="center">HelloAGI</h1>
+
+<p align="center">
+  <strong>An open-source governed autonomy runtime.</strong><br>
+  <em>Not another chatbot wrapper. A practical agent runtime that can think, act, learn, and grow — with deterministic safety gates that prompt injection cannot bypass.</em>
 </p>
 
 <p align="center">
@@ -26,6 +29,7 @@
   <a href="#what-it-looks-like">Demo</a> &middot;
   <a href="#how-helloagi-is-different">Design</a> &middot;
   <a href="#srg-deterministic-governance">SRG</a> &middot;
+  <a href="#dual-system-cognitive-runtime">Cognition</a> &middot;
   <a href="#tools">Tools</a> &middot;
   <a href="#the-architecture">Architecture</a> &middot;
   <a href="#api--channels">API</a> &middot;
@@ -86,6 +90,7 @@ Docs by goal:
 - Platforms: [docs/platforms.md](docs/platforms.md)
 - Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 - Upgrade (feature flags, browser extra): [docs/UPGRADE_GUIDE.md](docs/UPGRADE_GUIDE.md)
+- Dual-system cognitive runtime: [docs/cognitive-runtime.md](docs/cognitive-runtime.md)
 - Vision: [docs/HELLOAGI_VISION.md](docs/HELLOAGI_VISION.md)
 - Implementation plan: [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
 
@@ -288,6 +293,7 @@ Most agent stacks fall into one of two camps:
 HelloAGI is designed to be **autonomous and governed at the same time**. The things that actually make us different:
 
 - **SRG is code, not a prompt.** Every tool call passes through a deterministic Python policy engine (`governance/srg.py`). The LLM has no way to bypass it because it never runs inside the LLM. See [SRG: Deterministic Governance](#srg-deterministic-governance).
+- **Dual-system cognition.** A deterministic router decides per turn whether to use a fast Haiku-driven path (System 1) for familiar tasks or a debating Agent Council (System 2) for novel/risky ones. Successful debates crystallize into Skills, so the runtime gets cheaper and smarter with experience. See [Dual-System Cognitive Runtime](#dual-system-cognitive-runtime).
 - **Skill crystallization.** A successful multi-step workflow can be saved as a reusable skill that the agent invokes by name later — not just chat history, real stored procedures.
 - **Persistent, per-principal identity and memory.** Each Telegram/Discord/CLI principal has their own state, preferences, timezone, and relationship history. Conversations don't reset to zero.
 - **Grounded time awareness.** Every system prompt includes current date, user-local clock, IANA timezone, and a UTC anchor, resolved per-principal. The agent knows what day it is and what zone you're in.
@@ -321,6 +327,12 @@ HelloAGI is designed to be **autonomous and governed at the same time**. The thi
 │  └──────┬──────┘  └──────┬───────┘  └───────────┬─────────────┘ │
 │         │                │                       │               │
 │  ┌──────▼────────────────▼───────────────────────▼─────────────┐ │
+│  │            COGNITIVE ROUTER  (System 1 vs System 2)          │ │
+│  │   familiar + low-risk → Haiku Expert     novel/risky → Council│ │
+│  │       ▲   System 2 successes crystallize back into Skills    │ │
+│  └──────┬───────────────────────────────────────────────────────┘ │
+│         │                                                         │
+│  ┌──────▼──────────────────────────────────────────────────────┐ │
 │  │              AGENTIC TOOL-CALLING LOOP                      │ │
 │  │                                                              │ │
 │  │  User goal → Plan → Execute tools → Verify → Respond        │ │
@@ -405,6 +417,97 @@ helloagi run --policy research        # web research optimized
 helloagi run --policy creative        # creative writing mode
 helloagi run --policy reviewer        # read-only analysis
 helloagi run --policy aggressive      # maximum autonomy
+```
+
+---
+
+## Dual-System Cognitive Runtime
+
+HelloAGI's cognitive runtime mirrors fast/slow human cognition. A **deterministic router** decides, before every reasoning turn, whether the task should use the cheap fast path (**System 1**) or the deep deliberative path (**System 2**). Successful System 2 runs **crystallize into stored Skills**, so the next matching task routes back to System 1 — the runtime gets cheaper and smarter with experience.
+
+```
+you> generate a status report from the latest sprint board
+
+  [router] fingerprint=fp_8a2c risk=0.12 skill_match=sprint-status-recap (conf=0.82)
+  [router] decision: SYSTEM 1  (Haiku, expert mode)
+
+  🟢 web_fetch       ALLOW   sprint board API
+  🟢 file_write      ALLOW   wrote ./reports/sprint-23.md
+
+Done. (1 turn, 2 tool calls — System 1)
+```
+
+```
+you> design a multi-region failover for our Postgres cluster with zero data loss
+
+  [router] fingerprint=fp_4f31 risk=0.71  no skill match
+  [router] decision: SYSTEM 2  (Agent Council)
+
+  [council] round 0
+    planner   : proposes synchronous replication + Patroni + HAProxy
+    critic    : questions cross-region latency budget on synchronous writes
+    risk_audit: flags split-brain risk during regional partition
+    synth     : revised plan — quorum-based commit + automated failover
+    vote      : yes×4  consensus
+
+  🟡 SRG: ESCALATE — schema-changing tool calls require approval
+  ...
+```
+
+Three things make this different from a "router-shaped prompt":
+
+1. **The router is code, not a prompt.** Same as SRG. Routing decisions are journaled and replayable.
+2. **System 2 is a real debate, not a chain-of-thought trick.** Four LLM agents (Planner, Critic, Risk Auditor, Synthesizer) each take a structured turn with bounded rounds and per-agent vote weights. Consensus triggers an early exit.
+3. **Successful debates train the System 1 path.** After three council passes for the same fingerprint with ≥66% inter-agent agreement, the recipe crystallizes into a Skill. The next matching task routes to the cheap path automatically.
+
+### When the runtime picks System 1 vs System 2
+
+| Signal | Goes to |
+|---|---|
+| Skill match relevance ≥ 0.75 **and** confidence ≥ 0.70 **and** risk < 0.50 | **System 1** (Haiku) |
+| Anything else (novel fingerprint, low-confidence skill, risky tool, SRG escalation) | **System 2** (Council) |
+| System 1 skill failure rate < 25% over ≥5 uses | Auto-demoted; next match goes to System 2 |
+
+### Self-improvement loop
+
+```
+System 2 pass  →  weight nudges (yes-voters +0.06, no-voters -0.10)
+              →  fingerprint accumulator
+              →  if ≥3 passes & ≥66% agreement: crystallize to Skill
+              →  next matching task: routes to System 1
+```
+
+Failures decay both the offending Skill's confidence and the offending agent's vote weight. Weight clamping (`[0.1, 3.0]`) prevents a runaway feedback loop from silencing any voice.
+
+### Failure-mode guards
+
+The runtime ships with three concrete guards designed to prevent the agent from burning its turn budget floundering on a task it should know how to solve:
+
+- **Pattern-hint injection** — the system prompt gets a `<task-pattern-hint>` block listing tools the agent has historically used for similar topic words.
+- **Stall detector** — after N consecutive silent tool-only turns past a warm-up window, injects a `<turn-budget-warning>` reminder asking the agent to summarize and reconsider its approach.
+- **Per-agent circuit breakers** — a council agent that raises or returns parse-error abstains 3+ times gets sidelined for 30s. The debate continues with the rest of the council.
+
+### Activation
+
+The cognitive runtime ships **disabled by default**. Behavior is identical to pre-cognitive HelloAGI until you flip the flag in `helloagi.json`:
+
+```json
+{
+  "cognitive_runtime": {
+    "enabled": true,
+    "mode": "dual"
+  }
+}
+```
+
+Recommended ramp: `observe` → `system1_only` → `dual`. Full configuration reference and observability tooling: [docs/cognitive-runtime.md](docs/cognitive-runtime.md).
+
+```bash
+# Inspect routing decisions, outcomes, weight calibration:
+python scripts/cognitive_dashboard.py
+
+# Replay or re-deliberate a council trace:
+python scripts/replay_trace.py <trace_id> [--rerun]
 ```
 
 ---
@@ -620,6 +723,7 @@ you> Build me a CLI todo app in Python
 src/agi_runtime/
 ├── core/             # Agent loop, personality, runtime
 ├── governance/       # SRG — deterministic safety gate
+├── cognition/        # Dual-system runtime: router, System 1, System 2 council, crystallizer
 ├── tools/            # 23 builtin tools with decorator registration
 ├── skills/           # Skill crystallization and management
 ├── memory/           # Identity evolution, embeddings, compressor
@@ -636,6 +740,7 @@ src/agi_runtime/
 ├── onboarding/       # Beautiful setup wizard + quotes
 ├── kernel/           # Full subsystem bootstrap
 ├── latency/          # ALE anticipatory cache
+├── intelligence/     # PatternDetector — historical tool/topic stats
 └── observability/    # JSONL journal
 ```
 

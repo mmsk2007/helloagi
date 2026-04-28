@@ -45,6 +45,16 @@ class SkillContract:
     success_count: int = 0
     failure_count: int = 0
 
+    # Cognitive runtime — populated lazily for old skills, set on creation for new ones.
+    # ``task_fingerprint`` lets the router answer "have we run this before?" in O(1).
+    # System-1 counters track how the cheap/fast Haiku path performs on this skill;
+    # divergence between system1 and overall counts signals "this skill needs the
+    # full council, not just Expert Mode".
+    task_fingerprint: str = ""
+    system1_success_count: int = 0
+    system1_failure_count: int = 0
+    council_origin_trace_id: str = ""
+
     # Governance
     srg_risk_level: str = "low"  # "low", "medium", "high"
     status: str = "candidate"   # "candidate", "active", "retired", "archived"

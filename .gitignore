@@ -7,10 +7,17 @@ _local_install/
 .tmp-pip/
 build/
 src/*.egg-info/
+
+# Secrets & per-user runtime config (the .example variants are tracked).
 .env
 .env.*
 helloagi.json
+helloagi.onboard.json
+
+# Per-user runtime state.
 /memory/
+
+# Voice / audio scratch files captured during local runs.
 /voice.wav
 /voice.mp3
 /voice.ogg
@@ -20,6 +27,8 @@ helloagi.json
 /voice-*.ogg
 /voice-*.mp3
 /voice-*.m4a
+
+# Browser-tooling profiles & history dumps.
 /History_Copy
 /temp_profile/
 /chrome_profile/
@@ -27,10 +36,19 @@ helloagi.json
 /playwright/
 /user-data-dir/
 
+# Locally generated docs / scratch.
 docs/daily-research/
-helloagi.onboard.json
+research_output.txt
+
+# Personal scratch agents and stray dirs from accidental shell typos.
+/my_agent/
+/-p/
 
 # Screenshot / screen-capture artifacts from browser + computer-use tool runs.
 # These are personal desktop captures and must never land in the public repo.
-# If a real PNG asset is ever needed, add it explicitly with `git add -f path/to/file.png`.
+# *.png is a blanket ignore; whitelist the curated assets dir for the README
+# logo + any future committed images. Add a real PNG with `git add -f` if you
+# need to bypass even that.
 *.png
+!docs/assets/
+!docs/assets/**
