@@ -1,0 +1,40 @@
+# Publishes to PyPI when you publish a GitHub Release (creates a tag).
+# Configure Trusted Publisher on PyPI with:
+#   Owner: mmsk2007
+#   Repository: <exact name from repo URL, e.g. helloagi>
+#   Workflow: publish-pypi.yml
+#   Environment (optional): pypi
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  pypi-publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/helloagi/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build
+        run: pip install build
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
