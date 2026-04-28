@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/HelloAGI.png" alt="HelloAGI" width="220">
+  <img src="docs/assets/HelloAGI.png" alt="HelloAGI" width="880">
 </p>
 
 <h1 align="center">HelloAGI</h1>
