@@ -18,6 +18,7 @@ import asyncio
 import contextvars
 import json
 import os
+import shutil
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -235,11 +236,12 @@ class HelloAGIAgent:
         self._histories: Dict[str, List[dict]] = {}
         self._session_tool_calls_by_principal: Dict[str, List[dict]] = {}
 
-        # LLM backbones (Anthropic + optional Gemini + optional OpenAI) and active provider
+        # LLM backbones (Anthropic + optional Gemini/OpenAI + Codex CLI fallback) and active provider
         self._claude = None
         self._gemini_client = None
         self._openai_client = None
-        self._llm_provider: Optional[str] = None  # "anthropic" | "google" | "openai" | None
+        self._codex_cli_path: Optional[str] = None
+        self._llm_provider: Optional[str] = None  # "anthropic" | "google" | "openai" | "codex" | None
         self._configure_llm_backbone()
 
         # Callbacks (set by CLI/API layer)
@@ -487,11 +489,11 @@ class HelloAGIAgent:
         return out
 
     def _configure_llm_backbone(self) -> None:
-        """Pick Anthropic vs Google vs OpenAI from settings/env and available credentials."""
+        """Pick Anthropic, Google, OpenAI SDK, or Codex CLI from settings/env."""
         env_override = os.environ.get("HELLOAGI_LLM_PROVIDER")
         pref = (env_override or getattr(self.settings, "llm_provider", None) or "auto")
         pref = str(pref).strip().lower()
-        if pref not in ("auto", "anthropic", "google", "openai"):
+        if pref not in ("auto", "anthropic", "google", "openai", "codex"):
             pref = "auto"
 
         anthropic_credential = resolve_provider_credential("anthropic")
@@ -508,6 +510,15 @@ class HelloAGIAgent:
             has_openai = importlib.util.find_spec("openai") is not None
         except ModuleNotFoundError:
             has_openai = False
+
+        codex_path = shutil.which("codex")
+        codex_disabled = os.environ.get("HELLOAGI_CODEX_CLI_DISABLE", "").strip().lower() in ("1", "true", "yes")
+        codex_oauth_available = (
+            openai_credential.configured
+            and openai_credential.provider == "openai"
+            and openai_credential.source == "openai_codex_oauth"
+        )
+        codex_ok = bool(codex_path and codex_oauth_available and not codex_disabled)
 
         if pref == "auto":
             anthropic_ok = (
@@ -544,13 +555,22 @@ class HelloAGIAgent:
             if base:
                 kwargs["base_url"] = base
             self._openai_client = AsyncOpenAI(**kwargs)
+        if codex_ok:
+            self._codex_cli_path = codex_path
 
         if pref == "anthropic":
             self._llm_provider = "anthropic" if anthropic_ok else None
         elif pref == "google":
             self._llm_provider = "google" if google_ok else None
         elif pref == "openai":
-            self._llm_provider = "openai" if openai_ok else None
+            if openai_ok:
+                self._llm_provider = "openai"
+            elif codex_ok:
+                self._llm_provider = "codex"
+            else:
+                self._llm_provider = None
+        elif pref == "codex":
+            self._llm_provider = "codex" if codex_ok else None
         else:
             if anthropic_ok:
                 self._llm_provider = "anthropic"
@@ -558,6 +578,8 @@ class HelloAGIAgent:
                 self._llm_provider = "google"
             elif openai_ok:
                 self._llm_provider = "openai"
+            elif codex_ok:
+                self._llm_provider = "codex"
             else:
                 self._llm_provider = None
 
@@ -1354,6 +1376,8 @@ class HelloAGIAgent:
                 response = await self._think_async_claude(user_input, gov, tools, system_prompt, principal_id)
             elif self._llm_provider == "openai":
                 response = await self._think_async_openai(user_input, gov, tools, system_prompt, principal_id)
+            elif self._llm_provider == "codex":
+                response = await self._think_async_codex(user_input, gov, system_prompt)
             else:
                 response = await self._think_async_gemini(user_input, gov, tools, system_prompt, principal_id)
             if expert is not None:
@@ -1927,6 +1951,45 @@ class HelloAGIAgent:
             tool_calls_made=total_tool_calls, turns_used=turns_used,
             success=bool(summary),
             failure_reason="max_turns_reached" if not summary else "",
+        )
+
+    async def _think_async_codex(
+        self, user_input: str, gov: GovernanceResult, system_prompt: str
+    ) -> AgentResponse:
+        """Text-only Codex CLI backbone for official Codex OAuth logins."""
+        from agi_runtime.llm.codex_cli_adapter import run_codex_exec
+
+        codex_bin = self._codex_cli_path or "codex"
+        text = await asyncio.to_thread(
+            run_codex_exec,
+            system_prompt=system_prompt,
+            user_input=user_input,
+            cwd=os.getcwd(),
+            codex_bin=codex_bin,
+        )
+        ok = not text.startswith("Codex CLI failed:") and "returned an empty response" not in text
+        if ok:
+            self.ale.put(user_input, text)
+            self._auto_store_memory(user_input, text)
+            self.patterns.record_interaction(user_input, [])
+            self.identity.evolve(text)
+        self.journal.write(
+            "response" if ok else "llm_error",
+            {
+                "decision": gov.decision,
+                "risk": gov.risk,
+                "provider": "codex",
+                "ok": ok,
+            },
+        )
+        return AgentResponse(
+            text=text,
+            decision=gov.decision,
+            risk=gov.risk,
+            tool_calls_made=0,
+            turns_used=1,
+            success=ok,
+            failure_reason="" if ok else "codex_cli_error",
         )
 
     async def _think_async_openai(

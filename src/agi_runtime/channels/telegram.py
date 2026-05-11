@@ -853,11 +853,11 @@ class TelegramChannel(BaseChannel):
                 f"Backbone: llm_provider={settings.llm_provider!r}, "
                 f"default_model_tier={settings.default_model_tier!r}\n"
                 f"Config file: {cfg_path}\n\n"
-                "Usage: /provider auto|anthropic|google|openai"
+                "Usage: /provider auto|anthropic|google|openai|codex"
             )
             return
         choice = raw_args[0]
-        valid = {"auto", "anthropic", "google", "openai"}
+        valid = {"auto", "anthropic", "google", "openai", "codex"}
         if choice not in valid:
             await update.message.reply_text(
                 f"Unknown value {choice!r}. Use one of: {', '.join(sorted(valid))}"

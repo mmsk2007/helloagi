@@ -156,6 +156,7 @@ class HelloAGIHandler(BaseHTTPRequestHandler):
                 self.agent._claude is not None
                 or self.agent._gemini_client is not None
                 or getattr(self.agent, "_openai_client", None) is not None
+                or getattr(self.agent, "_codex_cli_path", None) is not None
             ),
             "llm_provider": getattr(self.agent, "_llm_provider", None),
             "srg_active": True,
@@ -494,7 +495,7 @@ def run_server(
 
     tools_count = len(agent._list_allowed_tools())
     skills_count = len(agent.skills.list_skills())
-    llm_ok = agent._claude or agent._gemini_client or getattr(agent, "_openai_client", None)
+    llm_ok = agent._claude or agent._gemini_client or getattr(agent, "_openai_client", None) or getattr(agent, "_codex_cli_path", None)
     llm_status = "connected" if llm_ok else "not configured"
 
     print(f"🧠 HelloAGI API v0.5.0")

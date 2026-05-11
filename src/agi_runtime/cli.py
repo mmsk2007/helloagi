@@ -1151,8 +1151,8 @@ def main():
     modelp.add_argument("--config", default="helloagi.json")
     model_sub = modelp.add_subparsers(dest="models_cmd")
     model_sub.add_parser("list", help="show llm_provider, default_model_tier, and sample resolved models")
-    msp = model_sub.add_parser("set-provider", help="set helloagi.json llm_provider (auto|anthropic|google|openai)")
-    msp.add_argument("provider", choices=["auto", "anthropic", "google", "openai"])
+    msp = model_sub.add_parser("set-provider", help="set helloagi.json llm_provider (auto|anthropic|google|openai|codex)")
+    msp.add_argument("provider", choices=["auto", "anthropic", "google", "openai", "codex"])
     mst = model_sub.add_parser("set-tier", help="set helloagi.json default_model_tier (speed|balanced|quality)")
     mst.add_argument("tier", choices=["speed", "balanced", "quality"])
 

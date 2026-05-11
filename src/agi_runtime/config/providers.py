@@ -68,6 +68,13 @@ def provider_credential_usable_for_llm_backbone(provider: str, credential: Provi
     if provider == "openai":
         if credential.auth_mode == "api_key":
             return len(secret) >= 20
+        # ChatGPT/Codex OAuth tokens are valid for the official Codex CLI, but
+        # they do not carry the normal OpenAI Platform ``model.request`` scope
+        # required by the OpenAI Python SDK. Treat them as non-SDK credentials
+        # so the runtime can choose the dedicated Codex CLI adapter instead of
+        # failing every chat.completions call with 401 missing_scope.
+        if credential.source == "openai_codex_oauth":
+            return False
         return len(secret) >= 20
 
     return len(secret) >= 16
