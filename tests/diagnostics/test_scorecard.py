@@ -96,7 +96,7 @@ class TestScorecard(unittest.TestCase):
             onboard = Path(td) / "onboard.json"
             onboard.write_text(json.dumps({"providers": {}}))
 
-            with patch.dict("os.environ", {}, clear=True):
+            with patch.dict("os.environ", {"HELLOAGI_OPENAI_OAUTH_DISABLE": "1"}, clear=True):
                 rep = run_scorecard(config_path=str(cfg), onboard_path=str(onboard))
 
             provider_check = next(check for check in rep["checks"] if check["name"] == "providers")

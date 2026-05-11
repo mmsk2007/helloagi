@@ -347,7 +347,9 @@ class ServiceManager:
     def _service_command(self, cfg: ServiceConfig) -> list[str]:
         # Resolved absolute interpreter so launchd/systemd/schtasks work when the unit
         # runs outside the user's shell (venv PATH not required).
-        python_exe = str(Path(sys.executable).resolve())
+        # Keep the venv launcher path instead of resolving the symlink to /usr/bin/python.
+        # Resolving loses the virtualenv context for detached service starts.
+        python_exe = str(Path(sys.executable).absolute())
         command = [
             python_exe,
             "-m",

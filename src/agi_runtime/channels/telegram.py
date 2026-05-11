@@ -154,6 +154,38 @@ class TelegramChannel(BaseChannel):
             return f"telegram:dm:{user_id}"
         return f"telegram:group:{chat_id}:user:{user_id}"
 
+    @staticmethod
+    def _is_group_chat(update) -> bool:
+        chat_type = getattr(getattr(update, "effective_chat", None), "type", "")
+        return chat_type in {"group", "supergroup"}
+
+    def _prepare_principal_for_message(self, update):
+        """Return principal state, making group chats natural instead of wizard-driven.
+
+        Telegram users often onboard in DM and then talk in a group. Group chats get a
+        distinct principal id for routing/history, so without this bridge the bot asks
+        the same first-run wizard questions again in the room. In groups, prefer the
+        user's completed DM profile; otherwise auto-mark the group principal as
+        onboarded with light defaults so normal conversation can continue naturally.
+        """
+        principal_id = self._principal_id_for_update(update)
+        if not self._is_group_chat(update) or not getattr(update, "effective_user", None):
+            return self.agent.principals.get(principal_id)
+
+        user_id = str(update.effective_user.id)
+        dm_principal_id = f"telegram:dm:{user_id}"
+        dm_state = self.agent.principals.get(dm_principal_id)
+        if dm_state.onboarded:
+            return self.agent.principals.link_profile(principal_id, dm_principal_id)
+
+        first_name = (getattr(update.effective_user, "first_name", "") or "").strip()
+        return self.agent.principals.update(
+            principal_id,
+            preferred_name=first_name,
+            onboarded=True,
+            bootstrap_completed=True,
+        )
+
     async def start(self):
         """Start the Telegram bot."""
         if not self.token:
@@ -988,7 +1020,7 @@ class TelegramChannel(BaseChannel):
         text = update.message.text
 
         principal_id = self._principal_id_for_update(update)
-        state = self.agent.principals.get(principal_id)
+        state = self._prepare_principal_for_message(update)
 
         preview = text.replace("\n", " ")
         if len(preview) > 80:

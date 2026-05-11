@@ -21,6 +21,7 @@ setup(
         'tzdata>=2024.1',
     ],
     extras_require={
+        'openai': ['openai>=1.40'],
         'rich': ['rich>=13.0'],
         'telegram': ['python-telegram-bot>=20.0'],
         'discord': ['discord.py>=2.0'],
@@ -31,8 +32,10 @@ setup(
             "pyttsx3>=2.90; platform_system != 'Windows'",
         ],
         'embeddings': ['google-genai>=1.0'],
+        'browser': ['playwright>=1.40'],
         'claude-sdk': ['claude-agent-sdk>=0.1'],
         'all': [
+            'openai>=1.40',
             'rich>=13.0',
             'python-telegram-bot>=20.0',
             'discord.py>=2.0',
@@ -41,6 +44,7 @@ setup(
             "SpeechRecognition>=3.10; platform_system != 'Windows'",
             "pyttsx3>=2.90; platform_system != 'Windows'",
             'claude-agent-sdk>=0.1',
+            'playwright>=1.40',
         ],
         'dev': ['pytest>=7.0', 'pytest-asyncio>=0.21'],
     },

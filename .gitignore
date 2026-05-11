@@ -39,6 +39,14 @@ helloagi.onboard.json
 # Locally generated docs / scratch.
 docs/daily-research/
 research_output.txt
+OPS_STATUS.md
+PAUSED_AUTOMATIONS.md
+*.log
+*.db
+*.sqlite
+*.sqlite3
+.codex/
+.openai/
 
 # Personal scratch agents and stray dirs from accidental shell typos.
 /my_agent/
