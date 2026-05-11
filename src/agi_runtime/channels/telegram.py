@@ -95,6 +95,19 @@ def _is_telegram_admin(user) -> bool:
         return False
 
 
+def _telegram_group_mode() -> str:
+    """How plain group chat messages are handled.
+
+    ``mention`` keeps shared rooms quiet: HelloAGI responds only when mentioned,
+    addressed by name, or when a user replies to the bot. Set
+    ``HELLOAGI_TELEGRAM_GROUP_MODE=all`` for old behavior.
+    """
+    raw = os.environ.get("HELLOAGI_TELEGRAM_GROUP_MODE", "mention").strip().lower()
+    if raw in {"all", "always", "open"}:
+        return "all"
+    return "mention"
+
+
 def _settings_config_path() -> str:
     """Path to helloagi.json (set by ``helloagi serve`` as HELLOAGI_CONFIG_PATH)."""
     p = (os.environ.get("HELLOAGI_CONFIG_PATH") or "").strip()
@@ -158,6 +171,43 @@ class TelegramChannel(BaseChannel):
     def _is_group_chat(update) -> bool:
         chat_type = getattr(getattr(update, "effective_chat", None), "type", "")
         return chat_type in {"group", "supergroup"}
+
+    def _is_message_for_this_bot(self, update, context) -> bool:
+        """Return True when a group text message is explicitly for HelloAGI."""
+        if not self._is_group_chat(update):
+            return True
+        if _telegram_group_mode() == "all":
+            return True
+        message = getattr(update, "message", None)
+        text = (getattr(message, "text", "") or "").strip()
+        bot = getattr(context, "bot", None)
+        username_raw = getattr(bot, "username", "") or ""
+        username = username_raw.lstrip("@").lower() if isinstance(username_raw, str) else ""
+        bot_id = getattr(bot, "id", None)
+
+        if username and re.search(rf"(?<!\w)@{re.escape(username)}\b", text, flags=re.IGNORECASE):
+            return True
+        # Natural-language addressing for groups where the handle is not handy.
+        if re.match(r"^\s*(hello\s*agi|helloagi)\b", text, flags=re.IGNORECASE):
+            return True
+
+        reply = getattr(message, "reply_to_message", None)
+        reply_user = getattr(reply, "from_user", None)
+        if bot_id is not None and getattr(reply_user, "id", None) == bot_id:
+            return True
+        if username and (getattr(reply_user, "username", "") or "").lower() == username:
+            return True
+        return False
+
+    def _strip_bot_addressing(self, text: str, context) -> str:
+        """Remove leading/common bot addressing before sending the prompt to the LLM."""
+        out = text or ""
+        username_raw = getattr(getattr(context, "bot", None), "username", "") or ""
+        username = username_raw.lstrip("@") if isinstance(username_raw, str) else ""
+        if username:
+            out = re.sub(rf"(?<!\w)@{re.escape(username)}\b[:,]?\s*", "", out, flags=re.IGNORECASE)
+        out = re.sub(r"^\s*(hello\s*agi|helloagi)[:,]?\s*", "", out, flags=re.IGNORECASE)
+        return out.strip() or text
 
     def _prepare_principal_for_message(self, update):
         """Return principal state, making group chats natural instead of wizard-driven.
@@ -1018,6 +1068,11 @@ class TelegramChannel(BaseChannel):
         user_id = str(update.effective_user.id)
         chat_id = str(update.effective_chat.id)
         text = update.message.text
+
+        if self._is_group_chat(update) and not self._is_message_for_this_bot(update, context):
+            logger.info("msg skip| chat=%s | group message not addressed to HelloAGI", chat_id)
+            return
+        text = self._strip_bot_addressing(text, context)
 
         principal_id = self._principal_id_for_update(update)
         state = self._prepare_principal_for_message(update)
