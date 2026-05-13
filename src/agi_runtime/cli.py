@@ -543,7 +543,9 @@ def tools_info(policy_pack: str = "safe-default") -> str:
     if not tools:
         return "No tools available."
 
-    lines: list[str] = []
+    lines: list[str] = [
+        "Legend: [ ] no risk / metadata, [+] low risk, [!] medium risk, [x] high risk"
+    ]
     current_toolset = None
     for tool in sorted(tools, key=lambda item: (item.toolset.value, item.name)):
         if tool.toolset != current_toolset:

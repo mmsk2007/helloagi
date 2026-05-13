@@ -3161,7 +3161,9 @@ class HelloAGIAgent:
         if not tools:
             return "No tools available."
 
-        lines = []
+        lines = [
+            "Legend: [ ] no risk / metadata, [+] low risk, [!] medium risk, [x] high risk"
+        ]
         current_toolset = None
         for t in sorted(tools, key=lambda x: (x.toolset.value, x.name)):
             if t.toolset != current_toolset:

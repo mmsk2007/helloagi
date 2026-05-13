@@ -49,10 +49,13 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("runs", result.stdout)
         self.assertIn("auth", result.stdout)
 
-    def test_tools_command_does_not_crash_on_windows_encoding(self):
+    def test_tools_command_includes_plain_text_risk_legend(self):
         result = self.run_cli("tools", "--policy", "reviewer")
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("[", result.stdout)
+        self.assertIn("Legend:", result.stdout)
+        self.assertIn("low risk", result.stdout)
+        self.assertIn("medium risk", result.stdout)
+        self.assertIn("high risk", result.stdout)
 
     def test_uninstall_requires_explicit_confirmation(self):
         result = self.run_cli("uninstall")
