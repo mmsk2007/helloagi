@@ -451,7 +451,7 @@ def _sync_auth_profiles(primary_provider: str, primary_auth_mode: str, openai_au
     return active_profile
 
 
-def _run_self_test(provider: str, provider_secret: str = "") -> dict:
+def _run_self_test(provider: str, provider_secret: str = "", identity_name: str = "") -> dict:
     results: dict[str, dict[str, object]] = {}
 
     try:
@@ -477,6 +477,8 @@ def _run_self_test(provider: str, provider_secret: str = "") -> dict:
         from agi_runtime.memory.identity import IdentityEngine
 
         identity = IdentityEngine()
+        if identity_name:
+            identity.state.name = identity_name
         results["identity"] = {"ok": identity.state.name is not None, "name": identity.state.name}
     except Exception as exc:
         results["identity"] = {"ok": False, "error": str(exc)}
@@ -833,7 +835,7 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     _step(7, total_steps, "Self-Test and Save")
     print(f"    {DIM}{MAGENTA}\"{step_quotes[2]}\"{NC}")
     print()
-    test_results = _run_self_test(primary_provider, provider_secret)
+    test_results = _run_self_test(primary_provider, provider_secret, agent_name)
     for name, result in test_results.items():
         if result.get("ok"):
             detail = ""
@@ -920,7 +922,15 @@ def run_wizard(path: str = "helloagi.onboard.json", options: WizardOptions | Non
     print()
     passed = sum(1 for item in test_results.values() if item.get("ok"))
     total_checks = len(test_results)
-    print(f"  {BOLD}{GREEN}Setup complete{NC} {DIM}({passed}/{total_checks} checks passed){NC}")
+    llm_ready = bool(test_results.get("llm", {}).get("ok"))
+    if llm_ready:
+        print(f"  {BOLD}{GREEN}Setup complete{NC} {DIM}({passed}/{total_checks} checks passed){NC}")
+    else:
+        print(f"  {BOLD}{YELLOW}Setup saved; model still needed{NC} {DIM}({passed}/{total_checks} checks passed){NC}")
+        print(
+            f"  {YELLOW}Next:{NC} add a provider credential, then run "
+            f"{BOLD}helloagi oneshot --message \"What can you do?\"{NC}"
+        )
     print()
     print(f"    Agent:        {CYAN}{agent_name}{NC}")
     print(f"    Owner:        {CYAN}{owner_name or '(not set)'}{NC}")

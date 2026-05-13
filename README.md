@@ -233,9 +233,9 @@ cd helloagi
    helloagi onboard
    ```
 
-   The wizard can import an existing OpenClaw/Hermes setup, choose the active provider (`template`, `anthropic`, or `google`), accept `api_key` or `auth_token` auth modes, create the active auth profile, generate `HELLOAGI_API_KEY` for the local service, and enable Telegram, Discord, or local voice in the same flow.
+   The wizard can import an existing OpenClaw/Hermes setup, choose the active provider (`template`, `anthropic`, `google`, or `openai`), accept `api_key` or `auth_token` auth modes, create the active auth profile, generate `HELLOAGI_API_KEY` for the local service, and enable Telegram, Discord, or local voice in the same flow.
 
-   **Non-interactive `--provider`:** only `template`, `anthropic`, or `google` are valid. **OpenAI** is not a primary `--provider` value. For OpenAI, set `OPENAI_API_KEY` or `OPENAI_AUTH_TOKEN` in `.env` (or use the interactive wizard’s optional OpenAI step).
+   **Non-interactive `--provider`:** `template`, `anthropic`, `google`, and `openai` are valid. For OpenAI, install the OpenAI extra (`pip install "helloagi[openai]"`) and set `OPENAI_API_KEY` or `OPENAI_AUTH_TOKEN` in `.env`.
 
    For scripted installs, the same setup can run without prompts:
 
@@ -243,7 +243,7 @@ cd helloagi
    helloagi onboard --non-interactive --provider anthropic --auth-mode auth_token --runtime-mode service --enable-extension telegram
    ```
 
-   Paste the Telegram token when asked (or add `TELEGRAM_BOT_TOKEN=...` to `.env` later). For model-backed replies, choose Anthropic or Google during onboarding and provide either the API key or auth token for that provider.
+   Paste the Telegram token when asked (or add it to `.env` later). For model-backed replies, choose Anthropic, Google, or OpenAI during onboarding and provide either the API key or auth token for that provider.
 
 5. **Initialize config** if you skipped it: `helloagi init` (wizard may already create `helloagi.json`).
 

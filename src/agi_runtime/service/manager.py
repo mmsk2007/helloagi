@@ -233,6 +233,7 @@ class ServiceManager:
 
         issues: list[str] = []
         recs: list[str] = []
+        notes: list[str] = []
         exe = str(Path(sys.executable).resolve())
         mp = Path(cfg.manifest_path) if cfg.manifest_path else None
         if mp and mp.exists():
@@ -266,7 +267,6 @@ class ServiceManager:
                 issues.append("native_not_registered")
                 recs.append("OS scheduler registration was not completed; re-run `helloagi service install`.")
 
-        notes: list[str] = []
         win_trig = os.environ.get("HELLOAGI_WINDOWS_TASK_SCHEDULE", "onlogon")
         if cfg.backend == "windows-task":
             wt = win_trig.strip().lower()

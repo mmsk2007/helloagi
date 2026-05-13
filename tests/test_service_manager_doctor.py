@@ -33,6 +33,28 @@ def test_doctor_detects_missing_manifest():
         assert d["ok"] is False
 
 
+def test_doctor_windows_detached_service_notes_without_native_registration():
+    with tempfile.TemporaryDirectory() as tmp:
+        p = Path(tmp) / "state.json"
+        manifest = Path(tmp) / "run-helloagi-service.cmd"
+        manifest.write_text("python command", encoding="utf-8")
+        sm = ServiceManager(state_path=str(p), platform_name="windows", native_control=False)
+        cfg = ServiceConfig(
+            installed=True,
+            native_registered=False,
+            manifest_path=str(manifest),
+            workdir=tmp,
+            backend="windows-task",
+        )
+        sm.save(cfg)
+
+        d = sm.doctor()
+
+        assert "native_not_registered" not in d["issues"]
+        assert d["notes"]
+        assert any("Task Scheduler is off by default" in note for note in d["notes"])
+
+
 def test_reinstall_requires_prior_install():
     with tempfile.TemporaryDirectory() as tmp:
         p = Path(tmp) / "state.json"

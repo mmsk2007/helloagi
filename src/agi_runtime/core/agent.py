@@ -3135,8 +3135,9 @@ class HelloAGIAgent:
             f"Current: GOOGLE={'set' if google_ready else 'unset'}, "
             f"ANTHROPIC={'set' if anthropic_ready else 'unset'}, "
             f"OPENAI={'set' if openai_ready else 'unset'}.\n\n"
-            f"Without an LLM, tool execution is still available.\n"
-            f"Available tools ({len(allowed_tools)}): {tools_list}\n"
+            f"Natural-language tool use needs a model. Until one is configured, "
+            f"HelloAGI can list available tools and check governance, but it cannot autonomously plan and call them from your prompt.\n"
+            f"Available tools once a model is active ({len(allowed_tools)}): {tools_list}\n"
         )
         if gov.decision == "escalate":
             text += "\n⚠️ This request was flagged for human confirmation."

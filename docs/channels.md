@@ -37,7 +37,14 @@ helloagi service install --extension telegram
 
 - Install: `pip install "helloagi[telegram]"`
 - Secret: `TELEGRAM_BOT_TOKEN`
-- Start: `helloagi serve --telegram`
+- Try-it/dev start: `helloagi serve --telegram` (foreground; stops when the terminal closes)
+- Production start:
+  ```bash
+  helloagi service install --telegram
+  helloagi service start
+  helloagi service status
+  ```
+- Group behavior: HelloAGI is quiet in groups unless mentioned or replied to, so a new public bot does not spam existing chats.
 
 ## Discord
 

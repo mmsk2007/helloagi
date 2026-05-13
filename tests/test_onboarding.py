@@ -4,6 +4,8 @@ import os
 import shutil
 import sqlite3
 import time
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -223,6 +225,43 @@ class TestOnboarding(unittest.TestCase):
             self.assertEqual(onboard.get("migration_source"), "hermes")
             env_text = Path(".env").read_text(encoding="utf-8")
             self.assertIn("ANTHROPIC_AUTH_TOKEN=hermes-import-token", env_text.replace("\r\n", "\n"))
+        finally:
+            os.chdir(old_cwd)
+            shutil.rmtree(td, ignore_errors=True)
+
+    def test_non_interactive_template_wizard_is_clear_model_still_needed(self):
+        td = _make_scratch_dir()
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(td)
+            test_results = _self_test_all_ok("template")
+            test_results["llm"] = {
+                "ok": False,
+                "error": "Template mode (no active runtime credential)",
+                "provider": "template",
+            }
+            buf = StringIO()
+            with patch(
+                "agi_runtime.onboarding.wizard._run_self_test",
+                return_value=test_results,
+            ) as run_self_test:
+                with redirect_stdout(buf):
+                    run_wizard(
+                        "helloagi.onboard.json",
+                        WizardOptions(
+                            non_interactive=True,
+                            runtime_mode="cli",
+                            provider="template",
+                            agent_name="TestAgent",
+                            owner_name="User",
+                        ),
+                    )
+            out = buf.getvalue()
+            run_self_test.assert_called_once()
+            self.assertEqual(run_self_test.call_args.args[2], "TestAgent")
+            self.assertIn("Setup saved; model still needed", out)
+            self.assertIn("Next:", out)
+            self.assertIn("Provider:", out)
         finally:
             os.chdir(old_cwd)
             shutil.rmtree(td, ignore_errors=True)
