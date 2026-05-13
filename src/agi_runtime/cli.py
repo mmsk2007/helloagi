@@ -978,6 +978,20 @@ def models_set_tier(config_path: str, tier: str) -> None:
     print(f"Saved default_model_tier={tier!r} to {config_path}")
 
 
+def readiness(path: str = ".", *, json_output: bool = False, allow_dirty: bool = False) -> None:
+    """Run public/open-source readiness checks for the current checkout."""
+    import json
+    from agi_runtime.diagnostics.public_readiness import format_public_readiness, run_public_readiness
+
+    report = run_public_readiness(path, require_clean=not allow_dirty)
+    if json_output:
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+    else:
+        print(format_public_readiness(report))
+    if not report.get("ready"):
+        raise SystemExit(1)
+
+
 def main():
     _configure_stdio()
     load_local_env()
@@ -1194,6 +1208,11 @@ def main():
     ds.add_argument("--config", default="helloagi.json")
     ds.add_argument("--onboard", default="helloagi.onboard.json")
 
+    readyp = sub.add_parser("readiness", help="audit public/open-source release readiness")
+    readyp.add_argument("--path", default=".", help="repository path to audit (default: current directory)")
+    readyp.add_argument("--allow-dirty", action="store_true", help="skip the clean-working-tree release gate")
+    readyp.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+
     rf = sub.add_parser("replay-failure", help="replay last failure context from journal")
     rf.add_argument("--config", default="helloagi.json")
 
@@ -1353,6 +1372,8 @@ def main():
         db_demo(args.config)
     elif args.cmd == "doctor-score":
         doctor_score(args.config, args.onboard)
+    elif args.cmd == "readiness":
+        readiness(args.path, json_output=args.json, allow_dirty=args.allow_dirty)
     elif args.cmd == "replay-failure":
         replay_failure(args.config)
     elif args.cmd == "openclaw":

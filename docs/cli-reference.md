@@ -60,5 +60,8 @@
 - `helloagi db-init`
 - `helloagi db-demo`
 - `helloagi doctor-score`
+- `helloagi readiness` — audit a clean checkout for public/open-source release hygiene: required docs, ignored private runtime artifacts, obvious secret/private-value leaks, install entrypoints, tests, and user-facing runtime feature discoverability
+- `helloagi readiness --allow-dirty` — run the same audit while local intentional changes are still staged/unstaged
+- `helloagi readiness --json` — machine-readable readiness report for CI or release gates
 - `helloagi replay-failure`
 - `helloagi dashboard`

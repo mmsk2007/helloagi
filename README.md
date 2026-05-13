@@ -163,6 +163,7 @@ helloagi extensions enable telegram             # Persistently enable Telegram e
 helloagi runs list                              # Inspect orchestration runs
 helloagi runs show <run-id>                     # Inspect a workflow run
 helloagi onboard-status                         # Show saved + live runtime readiness
+helloagi readiness                              # Audit public/open-source release hygiene
 helloagi dashboard                              # Live monitoring dashboard
 helloagi tools                                  # List all 23 built-in tools
 helloagi skills                                 # List learned skills
