@@ -7,6 +7,7 @@
 - `helloagi auto --goal "..." --steps <n>`
 - `helloagi tri-loop --goal "..."`
 - `helloagi openclaw --prompt "..."`
+- `helloagi context-plan --goal "Fix checkout bug" --task-type coding` — show a Context Unrolling plan: selected task-relevant primitives, typed workspace policy, and high-risk action gate
 
 ## Service and health
 

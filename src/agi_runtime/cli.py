@@ -556,6 +556,35 @@ def tools_info(policy_pack: str = "safe-default") -> str:
     return "\n".join(lines)
 
 
+def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
+    from agi_runtime.context_unrolling import ContextPrimitive, ContextUnrollingController, ContextWorkspace
+
+    primitives = [
+        ContextPrimitive(name="extract_constraints", produces="text_constraints", task_types={"coding", "business", "research", "any"}),
+        ContextPrimitive(name="inspect_relevant_files", produces="code_context", task_types={"coding"}),
+        ContextPrimitive(name="inspect_failing_tests", produces="test_evidence", task_types={"coding"}),
+        ContextPrimitive(name="summarize_document", produces="document_claims", task_types={"document", "research"}),
+        ContextPrimitive(name="ocr", produces="visual_text", task_types={"browser", "document", "visual"}),
+        ContextPrimitive(name="layout_graph", produces="ui_layout", task_types={"browser"}),
+        ContextPrimitive(name="estimate_depth", produces="geometry_context", task_types={"spatial", "robotics", "visual"}),
+        ContextPrimitive(name="verify_consistency", produces="verification", task_types={"coding", "browser", "research", "business", "any"}, cost=2),
+    ]
+    workspace = ContextWorkspace(goal=goal)
+    controller = ContextUnrollingController(primitives=primitives, max_primitives=max_primitives)
+    selected = controller.select(task_type=task_type, workspace=workspace)
+    lines = [
+        "Context Unrolling Plan",
+        f"goal: {goal}",
+        f"task_type: {task_type}",
+        "workspace: typed context with source, confidence, observed/generated, verified flags",
+        "selected_primitives:",
+    ]
+    for primitive in selected:
+        lines.append(f"- {primitive.name} -> {primitive.produces}")
+    lines.append("action_gate: high-risk actions require verified generated context")
+    return "\n".join(lines)
+
+
 def _service_manager():
     """Windows: Task Scheduler is opt-in (``HELLOAGI_SERVICE_NATIVE=1``) to avoid ``Access is denied`` for typical users."""
     import os
@@ -1223,6 +1252,15 @@ def main():
     oc.add_argument("--config", default="helloagi.json")
     oc.add_argument("--policy", default="safe-default")
 
+    cp = sub.add_parser("context-plan", help="show a context-unrolling primitive plan for a goal")
+    cp.add_argument("--goal", required=True)
+    cp.add_argument(
+        "--task-type",
+        default="coding",
+        choices=["coding", "browser", "document", "research", "business", "visual", "spatial", "robotics"],
+    )
+    cp.add_argument("--max-primitives", type=int, default=3)
+
     # New commands
     toolsp = sub.add_parser("tools", help="list available tools")
     toolsp.add_argument("--policy", default="safe-default")
@@ -1380,6 +1418,8 @@ def main():
         replay_failure(args.config)
     elif args.cmd == "openclaw":
         openclaw(args.prompt, args.config, args.policy)
+    elif args.cmd == "context-plan":
+        print(context_plan(args.goal, args.task_type, args.max_primitives))
     elif args.cmd == "tools":
         print(tools_info(args.policy))
     elif args.cmd == "skills":

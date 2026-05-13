@@ -100,7 +100,8 @@ Docs by goal:
 - Platforms: [docs/platforms.md](docs/platforms.md)
 - Troubleshooting: [docs/troubleshooting.md](docs/troubleshooting.md)
 - Upgrade (feature flags, browser extra): [docs/UPGRADE_GUIDE.md](docs/UPGRADE_GUIDE.md)
-- Dual-system cognitive runtime: [docs/cognitive-runtime.md](docs/cognitive-runtime.md)
+- Cognitive runtime: [docs/cognitive-runtime.md](docs/cognitive-runtime.md)
+- Context Unrolling workspace: [docs/context-unrolling.md](docs/context-unrolling.md)
 - Vision: [docs/HELLOAGI_VISION.md](docs/HELLOAGI_VISION.md)
 - Implementation plan: [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md)
 
@@ -164,6 +165,7 @@ helloagi runs list                              # Inspect orchestration runs
 helloagi runs show <run-id>                     # Inspect a workflow run
 helloagi onboard-status                         # Show saved + live runtime readiness
 helloagi readiness                              # Audit public/open-source release hygiene
+helloagi context-plan --goal "Fix bug" --task-type coding
 helloagi dashboard                              # Live monitoring dashboard
 helloagi tools                                  # List all 23 built-in tools
 helloagi skills                                 # List learned skills

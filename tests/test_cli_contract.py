@@ -57,6 +57,15 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("medium risk", result.stdout)
         self.assertIn("high risk", result.stdout)
 
+    def test_context_plan_command_outputs_task_relevant_workspace(self):
+        result = self.run_cli("context-plan", "--goal", "Fix checkout bug", "--task-type", "coding")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Context Unrolling Plan", result.stdout)
+        self.assertIn("goal: Fix checkout bug", result.stdout)
+        self.assertIn("extract_constraints", result.stdout)
+        self.assertIn("inspect_failing_tests", result.stdout)
+        self.assertNotIn("estimate_depth", result.stdout)
+
     def test_uninstall_requires_explicit_confirmation(self):
         result = self.run_cli("uninstall")
         self.assertEqual(result.returncode, 2, result.stderr)
