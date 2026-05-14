@@ -386,6 +386,17 @@ class HelloAGIAgent:
             )
         return "\n".join(lines)
 
+    def _build_context_unrolling_section(self) -> str:
+        """Prompt contract for typed workspace discipline before action."""
+        lines = [
+            "- For non-trivial tasks, build a typed intermediate workspace before answering or acting.",
+            "- Separate observed evidence from generated assumptions; preserve source/provenance and confidence for each important item.",
+            "- Select only task-relevant primitives (for example constraints, tool evidence, memory, risk, verification), not every possible context expansion.",
+            "- Always verify generated assumptions before high-risk or irreversible tool calls; if verification is missing, ask, inspect, or downgrade to a safe explanation.",
+            "- In final answers, distinguish verified facts from assumptions when that affects user trust or safety.",
+        ]
+        return "\n".join(lines)
+
     def _build_active_task_section(self) -> Optional[str]:
         """Summarize the live objective so the model stays on the same task."""
         recent_user_messages = self._recent_user_messages(limit=5)
@@ -653,6 +664,11 @@ class HelloAGIAgent:
         parts.append("<response-contract>")
         parts.append(self._build_response_contract_section())
         parts.append("</response-contract>")
+
+        parts.append("")
+        parts.append("<context-unrolling>")
+        parts.append(self._build_context_unrolling_section())
+        parts.append("</context-unrolling>")
 
         # Inject grounded time awareness (date, clock, timezone, UTC anchor).
         # Per-principal tz overrides the runtime setting, which overrides host-local.

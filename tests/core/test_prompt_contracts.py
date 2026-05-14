@@ -69,6 +69,21 @@ class TestPromptContracts(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_system_prompt_includes_context_unrolling_action_gate(self):
+        tmp = _make_scratch_dir()
+        try:
+            agent = self._make_agent(tmp)
+
+            prompt = agent._build_system_prompt()
+
+            self.assertIn("<context-unrolling>", prompt)
+            self.assertIn("typed intermediate workspace", prompt)
+            self.assertIn("observed evidence from generated assumptions", prompt)
+            self.assertIn("verify generated assumptions before high-risk or irreversible tool calls", prompt)
+            self.assertIn("</context-unrolling>", prompt)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_sub_agent_prompt_is_execution_focused(self):
         tmp = _make_scratch_dir()
         try:
