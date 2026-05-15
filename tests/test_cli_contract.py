@@ -66,6 +66,21 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("inspect_failing_tests", result.stdout)
         self.assertNotIn("estimate_depth", result.stdout)
 
+    def test_context_plan_operations_task_includes_risk_verification_primitives(self):
+        result = self.run_cli(
+            "context-plan",
+            "--goal",
+            "Delete temp build artifacts after confirming scope",
+            "--task-type",
+            "operations",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("task_type: operations", result.stdout)
+        self.assertIn("identify_action_risk", result.stdout)
+        self.assertIn("verify_scope", result.stdout)
+        self.assertIn("action_gate: high-risk actions require verified generated context", result.stdout)
+        self.assertNotIn("estimate_depth", result.stdout)
+
     def test_uninstall_requires_explicit_confirmation(self):
         result = self.run_cli("uninstall")
         self.assertEqual(result.returncode, 2, result.stderr)

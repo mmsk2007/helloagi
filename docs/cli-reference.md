@@ -8,6 +8,7 @@
 - `helloagi tri-loop --goal "..."`
 - `helloagi openclaw --prompt "..."`
 - `helloagi context-plan --goal "Fix checkout bug" --task-type coding` — show a Context Unrolling plan: selected task-relevant primitives, typed workspace policy, and high-risk action gate
+- `helloagi context-plan --goal "Delete temp build artifacts after confirming scope" --task-type operations` — show risk-identification and scope-verification primitives before high-risk operational actions
 
 ## Service and health
 

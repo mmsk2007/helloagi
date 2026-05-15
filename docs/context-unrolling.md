@@ -75,6 +75,22 @@ For a coding task, HelloAGI should build context like:
 
 High-risk actions such as file writes, service restarts, pushes, or deploys should require verified context.
 
+## Operations/action-gating application
+
+For an operations task, HelloAGI should build context like:
+
+```json
+{
+  "goal": "Delete temp build artifacts after confirming scope",
+  "text_constraints": ["only local temp artifacts", "no production service changes"],
+  "action_risk": ["destructive filesystem operation"],
+  "scope_evidence": ["paths inspected", "rollback/restore option identified"],
+  "verification_results": ["generated assumptions verified before action"]
+}
+```
+
+The `context-plan` CLI supports `--task-type operations` so first users can see the risk-identification and scope-verification primitives before any high-risk action.
+
 ## Browser/computer-use application
 
 For a UI task, HelloAGI should build context like:

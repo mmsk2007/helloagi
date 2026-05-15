@@ -560,14 +560,16 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
     from agi_runtime.context_unrolling import ContextPrimitive, ContextUnrollingController, ContextWorkspace
 
     primitives = [
-        ContextPrimitive(name="extract_constraints", produces="text_constraints", task_types={"coding", "business", "research", "any"}),
+        ContextPrimitive(name="extract_constraints", produces="text_constraints", task_types={"coding", "business", "research", "operations", "any"}),
         ContextPrimitive(name="inspect_relevant_files", produces="code_context", task_types={"coding"}),
         ContextPrimitive(name="inspect_failing_tests", produces="test_evidence", task_types={"coding"}),
         ContextPrimitive(name="summarize_document", produces="document_claims", task_types={"document", "research"}),
         ContextPrimitive(name="ocr", produces="visual_text", task_types={"browser", "document", "visual"}),
         ContextPrimitive(name="layout_graph", produces="ui_layout", task_types={"browser"}),
+        ContextPrimitive(name="identify_action_risk", produces="action_risk", task_types={"operations"}),
+        ContextPrimitive(name="verify_scope", produces="scope_evidence", task_types={"operations"}),
         ContextPrimitive(name="estimate_depth", produces="geometry_context", task_types={"spatial", "robotics", "visual"}),
-        ContextPrimitive(name="verify_consistency", produces="verification", task_types={"coding", "browser", "research", "business", "any"}, cost=2),
+        ContextPrimitive(name="verify_consistency", produces="verification", task_types={"coding", "browser", "research", "business", "operations", "any"}, cost=2),
     ]
     workspace = ContextWorkspace(goal=goal)
     controller = ContextUnrollingController(primitives=primitives, max_primitives=max_primitives)
@@ -1257,7 +1259,7 @@ def main():
     cp.add_argument(
         "--task-type",
         default="coding",
-        choices=["coding", "browser", "document", "research", "business", "visual", "spatial", "robotics"],
+        choices=["coding", "browser", "document", "research", "business", "operations", "visual", "spatial", "robotics"],
     )
     cp.add_argument("--max-primitives", type=int, default=3)
 
