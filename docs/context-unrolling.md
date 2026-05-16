@@ -91,6 +91,8 @@ For an operations task, HelloAGI should build context like:
 
 The `context-plan` CLI supports `--task-type operations` so first users can see the risk-identification and scope-verification primitives before any high-risk action.
 
+Actual tool execution now journals a compact `context_workspace_tool_evidence` event for each normal model-driven tool call. The event links the observed user request, generated tool intent (tool name and input keys only), SRG governance verification, and tool result evidence. This makes runtime provenance auditable without duplicating full prompts, file paths, or tool outputs into the context workspace event.
+
 ## Browser/computer-use application
 
 For a UI task, HelloAGI should build context like:
@@ -122,8 +124,7 @@ For a paper or document task, HelloAGI should build:
 
 ## Next implementation steps
 
-1. Add CLI/dev command to show a context-unrolling plan for a goal.
-2. Integrate `ContextWorkspace` into planning/orchestration paths.
-3. Add primitive adapters for existing tools: file search/read, tests, browser screenshot/OCR, web fetch, verifier.
-4. Add risk-gated actor behavior: high-risk actions require verified context.
-5. Add journaling so context items can be audited without leaking private runtime state.
+1. Integrate `ContextWorkspace` into planning/orchestration paths beyond tool evidence journaling.
+2. Add primitive adapters for existing tools: file search/read, tests, browser screenshot/OCR, web fetch, verifier.
+3. Add risk-gated actor behavior: high-risk actions require verified context.
+4. Expand journal viewers/replay so context items can be audited from CLI diagnostics without leaking private runtime state.

@@ -133,22 +133,25 @@ class ContextWorkspace:
             return not self.has_unverified_generated_context()
         return True
 
-    def summarize(self) -> dict[str, Any]:
+    def summarize(self, *, include_content: bool = False) -> dict[str, Any]:
+        items = []
+        for item in self._items:
+            row = {
+                "id": item.id,
+                "type": item.type,
+                "source": item.source,
+                "confidence": item.confidence,
+                "observed": item.observed,
+                "verified": item.verified,
+                "relation": item.relation,
+            }
+            if include_content:
+                row["content"] = item.content
+            items.append(row)
         return {
             "goal": self.goal,
             "inputs_count": len(self.inputs),
-            "items": [
-                {
-                    "id": item.id,
-                    "type": item.type,
-                    "source": item.source,
-                    "confidence": item.confidence,
-                    "observed": item.observed,
-                    "verified": item.verified,
-                    "relation": item.relation,
-                }
-                for item in self._items
-            ],
+            "items": items,
         }
 
 

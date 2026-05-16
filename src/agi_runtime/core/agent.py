@@ -35,6 +35,7 @@ from agi_runtime.config.providers import (
     resolve_provider_credential,
 )
 from agi_runtime.config.settings import RuntimeSettings
+from agi_runtime.context_unrolling import ContextWorkspace
 from agi_runtime.tools.registry import (
     ToolRegistry,
     ToolResult,
@@ -498,6 +499,85 @@ class HelloAGIAgent:
                 "input": row.get("input") if isinstance(row.get("input"), dict) else {},
             })
         return out
+
+    def _record_tool_context_workspace(
+        self,
+        *,
+        user_input: str,
+        tool_call: ToolCall | Dict[str, Any],
+        tool_governance: Any,
+        result: ToolResult | Any,
+        provider: str,
+    ) -> None:
+        """Journal typed context-unrolling evidence for an executed tool call.
+
+        The event records observed input, generated tool intent, SRG verification,
+        and tool evidence without copying full prompt/tool values into a second
+        payload. This makes provenance auditable while keeping logs compact.
+        """
+        if isinstance(tool_call, dict):
+            tool_name = str(tool_call.get("name", ""))
+            tool_input = tool_call.get("input") if isinstance(tool_call.get("input"), dict) else {}
+        else:
+            tool_name = tool_call.name
+            tool_input = tool_call.input if isinstance(tool_call.input, dict) else {}
+
+        decision = str(getattr(tool_governance, "decision", "unknown"))
+        risk = float(getattr(tool_governance, "risk", 0.0) or 0.0)
+        result_ok = bool(getattr(result, "ok", False))
+        result_text = result.to_content() if hasattr(result, "to_content") else str(result)
+
+        workspace = ContextWorkspace(
+            goal="runtime_tool_execution",
+            inputs=[{"kind": "user_request", "chars": len(user_input or "")}],
+        )
+        workspace.add(
+            item_type="user_request",
+            content={"chars": len(user_input or "")},
+            source="user",
+            confidence=1.0,
+            observed=True,
+            verified=True,
+            relation="goal",
+        )
+        workspace.add(
+            item_type="generated_tool_call",
+            content={"tool": tool_name, "input_keys": sorted(str(k) for k in tool_input.keys())},
+            source="llm_tool_plan",
+            confidence=0.7,
+            observed=False,
+            verified=decision == "allow",
+            relation="proposed_action",
+        )
+        workspace.add(
+            item_type="governance_verification",
+            content={"decision": decision, "risk": risk},
+            source="srg",
+            confidence=1.0,
+            observed=True,
+            verified=True,
+            relation="verification",
+        )
+        workspace.add(
+            item_type="tool_evidence",
+            content={"tool": tool_name, "ok": result_ok, "output_chars": len(result_text or "")},
+            source=f"tool:{tool_name}",
+            confidence=1.0 if result_ok else 0.4,
+            observed=True,
+            verified=result_ok,
+            relation="execution_result",
+        )
+        self.journal.write(
+            "context_workspace_tool_evidence",
+            {
+                "provider": provider,
+                "tool": tool_name,
+                "action_ready": workspace.ready_for_action(
+                    risk="high" if decision == "escalate" or risk >= 0.35 else "low"
+                ),
+                "workspace": workspace.summarize(include_content=True),
+            },
+        )
 
     def _configure_llm_backbone(self) -> None:
         """Pick Anthropic, Google, OpenAI SDK, or Codex CLI from settings/env."""
@@ -1886,6 +1966,17 @@ class HelloAGIAgent:
                     self.circuit_breaker.record_failure(tc.name)
                     self.supervisor.record_tool_failure(tc.name, result.to_content()[:200])
 
+                try:
+                    self._record_tool_context_workspace(
+                        user_input=user_input,
+                        tool_call=tc,
+                        tool_governance=tool_gov,
+                        result=result,
+                        provider="anthropic",
+                    )
+                except Exception as exc:
+                    self.journal.write("context_workspace_record_error", {"error": str(exc)[:300], "provider": "anthropic"})
+
                 self.journal.write("tool_exec", {
                     "tool": tc.name,
                     "input": {k: str(v)[:200] for k, v in tc.input.items()},
@@ -2306,6 +2397,17 @@ class HelloAGIAgent:
                 else:
                     self.circuit_breaker.record_failure(tc.name)
                     self.supervisor.record_tool_failure(tc.name, result.to_content()[:200])
+
+                try:
+                    self._record_tool_context_workspace(
+                        user_input=user_input,
+                        tool_call=tc,
+                        tool_governance=tool_gov,
+                        result=result,
+                        provider="openai",
+                    )
+                except Exception as exc:
+                    self.journal.write("context_workspace_record_error", {"error": str(exc)[:300], "provider": "openai"})
 
                 self.journal.write("tool_exec", {
                     "tool": tc.name,

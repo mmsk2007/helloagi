@@ -1,3 +1,4 @@
+import json
 import shutil
 import unittest
 from pathlib import Path
@@ -81,6 +82,47 @@ class TestPromptContracts(unittest.TestCase):
             self.assertIn("observed evidence from generated assumptions", prompt)
             self.assertIn("verify generated assumptions before high-risk or irreversible tool calls", prompt)
             self.assertIn("</context-unrolling>", prompt)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_tool_execution_records_context_workspace_evidence(self):
+        tmp = _make_scratch_dir()
+        try:
+            agent = self._make_agent(tmp)
+
+            class Governance:
+                decision = "allow"
+                risk = 0.1
+
+            class Result:
+                ok = True
+
+                def to_content(self):
+                    return "read 3 lines"
+
+            agent._record_tool_context_workspace(
+                user_input="Read docs/context-unrolling.md and summarize the verified parts.",
+                tool_call={"name": "file_read", "input": {"path": "docs/context-unrolling.md"}},
+                tool_governance=Governance(),
+                result=Result(),
+                provider="test",
+            )
+
+            events = [line for line in (tmp / "events.jsonl").read_text().splitlines() if line]
+            self.assertEqual(len(events), 1)
+            self.assertIn('"kind": "context_workspace_tool_evidence"', events[0])
+            self.assertIn('"type": "user_request"', events[0])
+            self.assertIn('"type": "generated_tool_call"', events[0])
+            self.assertIn('"type": "governance_verification"', events[0])
+            self.assertIn('"type": "tool_evidence"', events[0])
+            self.assertIn('"observed": true', events[0])
+            self.assertIn('"verified": true', events[0])
+            event = json.loads(events[0])
+            generated = event["payload"]["workspace"]["items"][1]
+            self.assertEqual(generated["content"], {"tool": "file_read", "input_keys": ["path"]})
+            self.assertNotIn("docs/context-unrolling.md", json.dumps(generated["content"]))
+            self.assertNotIn("docs/context-unrolling.md", events[0])
+            self.assertNotIn("Read docs/context-unrolling.md", events[0])
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

@@ -88,3 +88,21 @@ def test_primitive_result_writes_typed_context_into_workspace():
     assert item.content == ["Build a typed workspace before final action"]
     assert item.observed is False
     assert item.verified is False
+
+
+def test_workspace_summary_omits_content_by_default_and_can_include_it():
+    workspace = ContextWorkspace(goal="Audit runtime evidence")
+    workspace.add(
+        item_type="sensitive_observation",
+        content={"path": "private/runtime/path.txt"},
+        source="tool:file_read",
+        confidence=1.0,
+        observed=True,
+        verified=True,
+    )
+
+    default_summary = workspace.summarize()
+    content_summary = workspace.summarize(include_content=True)
+
+    assert "content" not in default_summary["items"][0]
+    assert content_summary["items"][0]["content"] == {"path": "private/runtime/path.txt"}
