@@ -24,18 +24,57 @@ class TestReplay(unittest.TestCase):
                 {"kind": "input", "payload": {"text": "safe prompt"}},
                 {"kind": "response", "payload": {"decision": "allow"}},
                 {"kind": "input", "payload": {"text": "risky prompt"}},
+                {
+                    "kind": "context_workspace_tool_evidence",
+                    "payload": {
+                        "tool": "file_write",
+                        "action_ready": False,
+                        "workspace": {
+                            "items": [
+                                {
+                                    "type": "generated_tool_call",
+                                    "source": "llm_tool_plan",
+                                    "observed": False,
+                                    "verified": False,
+                                },
+                                {
+                                    "type": "governance_verification",
+                                    "source": "srg",
+                                    "observed": True,
+                                    "verified": True,
+                                },
+                            ]
+                        },
+                    },
+                },
                 {"kind": "deny", "payload": {"risk": 0.9}},
                 {"kind": "response", "payload": {"decision": "fallback"}},
             ]
             j.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8")
 
-            rep = replay_last_failure(str(j), context_before=2, context_after=1)
+            rep = replay_last_failure(str(j), context_before=3, context_after=1)
 
             self.assertTrue(rep["ok"])
             self.assertEqual(rep["failure_kind"], "deny")
-            self.assertEqual(rep["failure"]["_line"], 4)
+            self.assertEqual(rep["failure"]["_line"], 5)
             self.assertEqual(rep["previous_input"]["payload"]["text"], "risky prompt")
-            self.assertEqual([event["kind"] for event in rep["context"]], ["response", "input", "deny", "response"])
+            self.assertEqual(
+                [event["kind"] for event in rep["context"]],
+                ["response", "input", "context_workspace_tool_evidence", "deny", "response"],
+            )
+            self.assertEqual(rep["latest_context_workspace"]["tool"], "file_write")
+            self.assertFalse(rep["latest_context_workspace"]["action_ready"])
+            self.assertEqual(
+                rep["latest_context_workspace"]["summary"],
+                {
+                    "items": 2,
+                    "observed": 1,
+                    "generated": 1,
+                    "verified": 1,
+                    "unverified_generated": 1,
+                    "item_types": ["generated_tool_call", "governance_verification"],
+                },
+            )
 
     def test_replay_skips_invalid_lines(self):
         with tempfile.TemporaryDirectory() as td:
