@@ -46,6 +46,68 @@ def _summarize_context_workspace(event: dict | None) -> dict | None:
     }
 
 
+def _short_text(value: object, *, limit: int = 160) -> str:
+    text = str(value or "").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def format_replay_report(report: dict) -> str:
+    """Render replay diagnostics as concise human-readable text."""
+    if not report.get("ok"):
+        return f"Replay failed: {report.get('error', 'unknown error')}"
+    if report.get("message"):
+        lines = [str(report["message"])]
+        lines.append(f"Parsed events: {report.get('parsed_events', 0)}")
+        skipped = report.get("skipped_lines", 0)
+        if skipped:
+            lines.append(f"Skipped malformed lines: {skipped}")
+        return "\n".join(lines)
+
+    failure = report.get("failure") if isinstance(report.get("failure"), dict) else {}
+    previous_input = report.get("previous_input") if isinstance(report.get("previous_input"), dict) else None
+    workspace = report.get("latest_context_workspace")
+    lines = [
+        f"Last failure: {report.get('failure_kind', 'unknown')} at journal line {failure.get('_line', 'unknown')}",
+        f"Parsed events: {report.get('parsed_events', 0)}",
+    ]
+    skipped = report.get("skipped_lines", 0)
+    if skipped:
+        lines.append(f"Skipped malformed lines: {skipped}")
+    if previous_input:
+        payload = previous_input.get("payload") if isinstance(previous_input.get("payload"), dict) else {}
+        text = payload.get("text") or payload.get("message") or payload.get("prompt") or ""
+        if text:
+            lines.append(f"Previous input: {_short_text(text)}")
+    if isinstance(workspace, dict):
+        summary = workspace.get("summary") if isinstance(workspace.get("summary"), dict) else {}
+        item_types = summary.get("item_types") if isinstance(summary.get("item_types"), list) else []
+        action_ready = workspace.get("action_ready")
+        if action_ready is True:
+            action_ready_text = "yes"
+        elif action_ready is False:
+            action_ready_text = "no"
+        else:
+            action_ready_text = "unknown"
+        lines.extend(
+            [
+                "Context workspace evidence:",
+                f"  tool: {workspace.get('tool') or 'unknown'}",
+                f"  journal line: {workspace.get('line') or 'unknown'}",
+                f"  action ready: {action_ready_text}",
+                "  items: "
+                f"{summary.get('items', 0)} "
+                f"(observed {summary.get('observed', 0)}, "
+                f"generated {summary.get('generated', 0)}, "
+                f"verified {summary.get('verified', 0)})",
+                f"  unverified generated: {summary.get('unverified_generated', 0)}",
+                f"  item types: {', '.join(str(item_type) for item_type in item_types) if item_types else 'none'}",
+            ]
+        )
+    return "\n".join(lines)
+
+
 def replay_last_failure(
     journal_path: str = "memory/events.jsonl",
     *,

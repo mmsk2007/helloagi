@@ -507,11 +507,11 @@ def health(config_path: str, onboard_path: str):
 
 
 def replay_failure(config_path: str):
-    from agi_runtime.diagnostics.replay import replay_last_failure
+    from agi_runtime.diagnostics.replay import format_replay_report, replay_last_failure
 
     s = load_settings(config_path)
     rep = replay_last_failure(journal_path=s.journal_path)
-    print(rep)
+    print(format_replay_report(rep))
 
 
 def tools_info(policy_pack: str = "safe-default") -> str:

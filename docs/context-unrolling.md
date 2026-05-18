@@ -91,7 +91,7 @@ For an operations task, HelloAGI should build context like:
 
 The `context-plan` CLI supports `--task-type operations` so first users can see the risk-identification and scope-verification primitives before any high-risk action.
 
-Actual tool execution now journals a compact `context_workspace_tool_evidence` event for each normal model-driven tool call. The event links the observed user request, generated tool intent (tool name and input keys only), SRG governance verification, and tool result evidence. This makes runtime provenance auditable without duplicating full prompts, file paths, or tool outputs into the context workspace event. `helloagi replay-failure` now includes the latest pre-failure context-workspace summary so users can audit observed/generated/verified counts and action-readiness without opening raw JSONL.
+Actual tool execution now journals a compact `context_workspace_tool_evidence` event for each normal model-driven tool call. The event links the observed user request, generated tool intent (tool name and input keys only), SRG governance verification, and tool result evidence. This makes runtime provenance auditable without duplicating full prompts, file paths, or tool outputs into the context workspace event. `helloagi replay-failure` renders the latest pre-failure context-workspace summary in human-readable text so users can audit observed/generated/verified counts and action-readiness without opening raw JSONL.
 
 ## Browser/computer-use application
 
@@ -127,4 +127,4 @@ For a paper or document task, HelloAGI should build:
 1. Integrate `ContextWorkspace` into planning/orchestration paths beyond tool evidence journaling.
 2. Add primitive adapters for existing tools: file search/read, tests, browser screenshot/OCR, web fetch, verifier.
 3. Add risk-gated actor behavior: high-risk actions require verified context.
-4. Add richer CLI rendering for context-workspace diagnostics while preserving redaction/privacy defaults.
+4. Add malformed/multiple-event replay tests for context-workspace diagnostics.

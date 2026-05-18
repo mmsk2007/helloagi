@@ -3,7 +3,7 @@ import tempfile
 import json
 from pathlib import Path
 
-from agi_runtime.diagnostics.replay import replay_last_failure
+from agi_runtime.diagnostics.replay import format_replay_report, replay_last_failure
 
 
 class TestReplay(unittest.TestCase):
@@ -94,6 +94,40 @@ class TestReplay(unittest.TestCase):
             self.assertEqual(rep["failure_kind"], "failure")
             self.assertEqual(rep["parsed_events"], 2)
             self.assertEqual(rep["skipped_lines"], 1)
+
+    def test_format_replay_report_renders_context_workspace_for_humans(self):
+        report = {
+            "ok": True,
+            "failure_kind": "deny",
+            "failure": {"_line": 12, "payload": {"risk": 0.9}},
+            "previous_input": {"_line": 10, "payload": {"text": "please write a file"}},
+            "latest_context_workspace": {
+                "tool": "file_write",
+                "action_ready": False,
+                "line": 11,
+                "summary": {
+                    "items": 3,
+                    "observed": 1,
+                    "generated": 2,
+                    "verified": 1,
+                    "unverified_generated": 2,
+                    "item_types": ["generated_tool_call", "governance_verification"],
+                },
+            },
+            "parsed_events": 12,
+            "skipped_lines": 0,
+        }
+
+        rendered = format_replay_report(report)
+
+        self.assertIn("Last failure: deny at journal line 12", rendered)
+        self.assertIn("Previous input: please write a file", rendered)
+        self.assertIn("Context workspace evidence:", rendered)
+        self.assertIn("tool: file_write", rendered)
+        self.assertIn("action ready: no", rendered)
+        self.assertIn("items: 3 (observed 1, generated 2, verified 1)", rendered)
+        self.assertIn("unverified generated: 2", rendered)
+        self.assertIn("item types: generated_tool_call, governance_verification", rendered)
 
 
 if __name__ == '__main__':
