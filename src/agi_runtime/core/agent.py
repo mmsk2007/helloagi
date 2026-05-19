@@ -508,6 +508,7 @@ class HelloAGIAgent:
         tool_governance: Any,
         result: ToolResult | Any,
         provider: str,
+        user_approved: bool = False,
     ) -> None:
         """Journal typed context-unrolling evidence for an executed tool call.
 
@@ -526,6 +527,7 @@ class HelloAGIAgent:
         risk = float(getattr(tool_governance, "risk", 0.0) or 0.0)
         result_ok = bool(getattr(result, "ok", False))
         result_text = result.to_content() if hasattr(result, "to_content") else str(result)
+        action_verified = decision == "allow" or (decision == "escalate" and bool(user_approved))
 
         workspace = ContextWorkspace(
             goal="runtime_tool_execution",
@@ -546,9 +548,19 @@ class HelloAGIAgent:
             source="llm_tool_plan",
             confidence=0.7,
             observed=False,
-            verified=decision == "allow",
+            verified=action_verified,
             relation="proposed_action",
         )
+        if decision == "escalate":
+            workspace.add(
+                item_type="user_approval_verification",
+                content={"approved": bool(user_approved)},
+                source="user_approval",
+                confidence=1.0,
+                observed=True,
+                verified=bool(user_approved),
+                relation="approval_gate",
+            )
         workspace.add(
             item_type="governance_verification",
             content={"decision": decision, "risk": risk},
@@ -1902,6 +1914,7 @@ class HelloAGIAgent:
                 tool_risk = tool_def.risk.value if tool_def else "medium"
 
                 tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
+                user_approved = False
 
                 if self.on_tool_start:
                     self.on_tool_start(tc.name, tc.input, tool_gov.decision)
@@ -1935,6 +1948,7 @@ class HelloAGIAgent:
                         if self.on_tool_end:
                             self.on_tool_end(tc.name, False, result_content)
                         continue
+                    user_approved = True
 
                 if not self.circuit_breaker.can_execute(tc.name):
                     cb_status = self.circuit_breaker.get_status(tc.name)
@@ -1973,6 +1987,7 @@ class HelloAGIAgent:
                         tool_governance=tool_gov,
                         result=result,
                         provider="anthropic",
+                        user_approved=user_approved,
                     )
                 except Exception as exc:
                     self.journal.write("context_workspace_record_error", {"error": str(exc)[:300], "provider": "anthropic"})
@@ -2334,6 +2349,7 @@ class HelloAGIAgent:
                 tool_def = self.tool_registry.get(tc.name)
                 tool_risk = tool_def.risk.value if tool_def else "medium"
                 tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
+                user_approved = False
 
                 if self.on_tool_start:
                     self.on_tool_start(tc.name, tc.input, tool_gov.decision)
@@ -2367,6 +2383,7 @@ class HelloAGIAgent:
                         if self.on_tool_end:
                             self.on_tool_end(tc.name, False, result_content)
                         continue
+                    user_approved = True
 
                 if not self.circuit_breaker.can_execute(tc.name):
                     cb_status = self.circuit_breaker.get_status(tc.name)
@@ -2405,6 +2422,7 @@ class HelloAGIAgent:
                         tool_governance=tool_gov,
                         result=result,
                         provider="openai",
+                        user_approved=user_approved,
                     )
                 except Exception as exc:
                     self.journal.write("context_workspace_record_error", {"error": str(exc)[:300], "provider": "openai"})

@@ -126,6 +126,41 @@ class TestPromptContracts(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_escalated_tool_context_records_user_approval_as_verification(self):
+        tmp = _make_scratch_dir()
+        try:
+            agent = self._make_agent(tmp)
+
+            class Governance:
+                decision = "escalate"
+                risk = 0.72
+
+            class Result:
+                ok = True
+
+                def to_content(self):
+                    return "wrote file"
+
+            agent._record_tool_context_workspace(
+                user_input="Update the selected config file after approval.",
+                tool_call={"name": "file_write", "input": {"path": "public/config.toml", "content": "safe"}},
+                tool_governance=Governance(),
+                result=Result(),
+                provider="test",
+                user_approved=True,
+            )
+
+            event = json.loads((tmp / "events.jsonl").read_text().splitlines()[0])
+            payload = event["payload"]
+            self.assertTrue(payload["action_ready"])
+            item_types = [item["type"] for item in payload["workspace"]["items"]]
+            self.assertIn("user_approval_verification", item_types)
+            generated = next(item for item in payload["workspace"]["items"] if item["type"] == "generated_tool_call")
+            self.assertTrue(generated["verified"])
+            self.assertNotIn("public/config.toml", json.dumps(payload))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_sub_agent_prompt_is_execution_focused(self):
         tmp = _make_scratch_dir()
         try:

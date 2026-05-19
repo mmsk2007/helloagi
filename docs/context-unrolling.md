@@ -91,7 +91,7 @@ For an operations task, HelloAGI should build context like:
 
 The `context-plan` CLI supports `--task-type operations` so first users can see the risk-identification and scope-verification primitives before any high-risk action.
 
-Actual tool execution now journals a compact `context_workspace_tool_evidence` event for each normal model-driven tool call. The event links the observed user request, generated tool intent (tool name and input keys only), SRG governance verification, and tool result evidence. This makes runtime provenance auditable without duplicating full prompts, file paths, or tool outputs into the context workspace event. `helloagi replay-failure` renders the latest pre-failure context-workspace summary in human-readable text so users can audit observed/generated/verified counts and action-readiness without opening raw JSONL.
+Actual tool execution now journals a compact `context_workspace_tool_evidence` event for each normal model-driven tool call. The event links the observed user request, generated tool intent (tool name and input keys only), SRG governance verification, optional user-approval verification for escalated actions, and tool result evidence. This makes runtime provenance auditable without duplicating full prompts, file paths, or tool outputs into the context workspace event. `helloagi replay-failure` renders the latest pre-failure context-workspace summary in human-readable text so users can audit observed/generated/verified counts and action-readiness without opening raw JSONL.
 
 ## Browser/computer-use application
 
