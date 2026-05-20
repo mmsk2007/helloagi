@@ -161,6 +161,15 @@ class TestPromptContracts(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_gemini_tool_execution_records_context_workspace_evidence(self):
+        source = Path(HelloAGIAgent._think_async_gemini.__code__.co_filename).read_text()
+        gemini_body = source[source.index("    async def _think_async_gemini"):]
+
+        self.assertIn("_record_tool_context_workspace", gemini_body)
+        self.assertIn('provider="google"', gemini_body)
+        self.assertIn("user_approved=user_approved", gemini_body)
+        self.assertIn('"provider": "google"', gemini_body)
+
     def test_sub_agent_prompt_is_execution_focused(self):
         tmp = _make_scratch_dir()
         try:

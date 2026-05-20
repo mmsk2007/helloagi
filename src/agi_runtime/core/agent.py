@@ -2982,6 +2982,7 @@ class HelloAGIAgent:
                 tool_def = self.tool_registry.get(tc.name)
                 tool_risk = tool_def.risk.value if tool_def else "medium"
                 tool_gov = self.governor.evaluate_tool(tc.name, tc.input, tool_risk)
+                user_approved = False
 
                 if self.on_tool_start:
                     self.on_tool_start(tc.name, tc.input, tool_gov.decision)
@@ -3009,6 +3010,7 @@ class HelloAGIAgent:
                         if self.on_tool_end:
                             self.on_tool_end(tc.name, False, result_content)
                         continue
+                    user_approved = True
 
                 if not self.circuit_breaker.can_execute(tc.name):
                     cb_status = self.circuit_breaker.get_status(tc.name)
@@ -3033,6 +3035,18 @@ class HelloAGIAgent:
                     self.circuit_breaker.record_failure(tc.name)
                     self.supervisor.record_tool_failure(tc.name, result.to_content()[:200])
 
+                try:
+                    self._record_tool_context_workspace(
+                        user_input=user_input,
+                        tool_call=tc,
+                        tool_governance=tool_gov,
+                        result=result,
+                        provider="google",
+                        user_approved=user_approved,
+                    )
+                except Exception as exc:
+                    self.journal.write("context_workspace_record_error", {"error": str(exc)[:300], "provider": "google"})
+
                 self.journal.write("tool_exec", {
                     "tool": tc.name,
                     "input": {k: str(v)[:200] for k, v in tc.input.items()},
@@ -3040,6 +3054,7 @@ class HelloAGIAgent:
                     "output_preview": result.to_content()[:300],
                     "governance": tool_gov.decision,
                     "risk": tool_gov.risk,
+                    "provider": "google",
                 })
                 out = result.to_content()
                 self._session_tool_calls.append({
