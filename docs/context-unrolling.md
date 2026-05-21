@@ -89,7 +89,7 @@ For an operations task, HelloAGI should build context like:
 }
 ```
 
-The `context-plan` CLI supports `--task-type operations` so first users can see the risk-identification and scope-verification primitives before any high-risk action.
+The `context-plan` CLI supports `--task-type operations` so first users can see the risk-identification and scope-verification primitives before any high-risk action. It also renders a compact `workspace_summary` showing the observed goal item and generated `primitive_selection` item with source, confidence, observed/generated state, and verification state. That makes the planning command itself demonstrate Context Unrolling instead of only listing primitive names.
 
 Actual tool execution now journals a compact `context_workspace_tool_evidence` event for normal Anthropic, OpenAI, and Gemini model-driven tool calls. The event links the observed user request, generated tool intent (tool name and input keys only), SRG governance verification, optional user-approval verification for escalated actions, and tool result evidence. This makes runtime provenance auditable without duplicating full prompts, file paths, or tool outputs into the context workspace event. `helloagi replay-failure` renders the latest pre-failure context-workspace summary in human-readable text so users can audit observed/generated/verified counts and action-readiness without opening raw JSONL.
 

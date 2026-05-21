@@ -65,6 +65,13 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("extract_constraints", result.stdout)
         self.assertIn("inspect_failing_tests", result.stdout)
         self.assertNotIn("estimate_depth", result.stdout)
+        self.assertIn("workspace_summary:", result.stdout)
+        self.assertIn("items_count: 2", result.stdout)
+        self.assertIn("observed_items: 1", result.stdout)
+        self.assertIn("generated_items: 1", result.stdout)
+        self.assertIn("verified_items: 1", result.stdout)
+        self.assertIn("primitive_selection", result.stdout)
+        self.assertIn("source=primitive_selector", result.stdout)
 
     def test_context_plan_operations_task_includes_risk_verification_primitives(self):
         result = self.run_cli(
@@ -79,6 +86,9 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("identify_action_risk", result.stdout)
         self.assertIn("verify_scope", result.stdout)
         self.assertIn("action_gate: high-risk actions require verified generated context", result.stdout)
+        self.assertIn("workspace_summary:", result.stdout)
+        self.assertIn("primitive_selection", result.stdout)
+        self.assertIn("source=primitive_selector", result.stdout)
         self.assertNotIn("estimate_depth", result.stdout)
 
     def test_uninstall_requires_explicit_confirmation(self):

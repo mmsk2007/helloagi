@@ -572,8 +572,31 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         ContextPrimitive(name="verify_consistency", produces="verification", task_types={"coding", "browser", "research", "business", "operations", "any"}, cost=2),
     ]
     workspace = ContextWorkspace(goal=goal)
+    workspace.add(
+        item_type="user_goal",
+        content={"task_type": task_type},
+        source="cli:context-plan",
+        confidence=1.0,
+        observed=True,
+        verified=True,
+        relation="planning input",
+    )
     controller = ContextUnrollingController(primitives=primitives, max_primitives=max_primitives)
     selected = controller.select(task_type=task_type, workspace=workspace)
+    workspace.add(
+        item_type="primitive_selection",
+        content={"selected": [primitive.name for primitive in selected]},
+        source="primitive_selector",
+        confidence=0.8,
+        observed=False,
+        verified=False,
+        relation="generated plan",
+    )
+    summary = workspace.summarize()
+    item_count = len(summary["items"])
+    observed_count = sum(1 for item in summary["items"] if item["observed"])
+    verified_count = sum(1 for item in summary["items"] if item["verified"])
+    generated_count = item_count - observed_count
     lines = [
         "Context Unrolling Plan",
         f"goal: {goal}",
@@ -583,6 +606,22 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
     ]
     for primitive in selected:
         lines.append(f"- {primitive.name} -> {primitive.produces}")
+    lines.extend([
+        "workspace_summary:",
+        f"  items_count: {item_count}",
+        f"  observed_items: {observed_count}",
+        f"  generated_items: {generated_count}",
+        f"  verified_items: {verified_count}",
+        "  items:",
+    ])
+    for item in summary["items"]:
+        lines.append(
+            "  - "
+            f"{item['type']} source={item['source']} "
+            f"confidence={item['confidence']:.2f} "
+            f"observed={str(item['observed']).lower()} "
+            f"verified={str(item['verified']).lower()}"
+        )
     lines.append("action_gate: high-risk actions require verified generated context")
     return "\n".join(lines)
 
