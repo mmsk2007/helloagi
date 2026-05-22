@@ -90,6 +90,22 @@ def test_primitive_result_writes_typed_context_into_workspace():
     assert item.verified is False
 
 
+def test_extract_goal_artifact_references_records_public_safe_file_and_test_mentions():
+    from agi_runtime.context_unrolling import extract_goal_artifact_references
+
+    result = extract_goal_artifact_references(
+        "Fix tests/test_cli_contract.py::TestCLIContract::test_context_plan and src/agi_runtime/cli.py"
+    )
+
+    assert result.item_type == "artifact_references"
+    assert result.observed is True
+    assert result.verified is True
+    assert result.content == {
+        "files": ["src/agi_runtime/cli.py", "tests/test_cli_contract.py"],
+        "tests": ["tests/test_cli_contract.py::TestCLIContract::test_context_plan"],
+    }
+
+
 def test_workspace_summary_omits_content_by_default_and_can_include_it():
     workspace = ContextWorkspace(goal="Audit runtime evidence")
     workspace.add(

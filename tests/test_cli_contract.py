@@ -73,6 +73,20 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("primitive_selection", result.stdout)
         self.assertIn("source=primitive_selector", result.stdout)
 
+    def test_context_plan_command_outputs_observed_artifact_references(self):
+        result = self.run_cli(
+            "context-plan",
+            "--goal",
+            "Fix tests/test_cli_contract.py::TestCLIContract::test_context_plan and src/agi_runtime/cli.py",
+            "--task-type",
+            "coding",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("artifact_references", result.stdout)
+        self.assertIn("source=primitive:extract_goal_artifact_references", result.stdout)
+        self.assertIn("observed=true", result.stdout)
+        self.assertIn("verified=true", result.stdout)
+
     def test_context_plan_operations_task_includes_risk_verification_primitives(self):
         result = self.run_cli(
             "context-plan",

@@ -557,7 +557,12 @@ def tools_info(policy_pack: str = "safe-default") -> str:
 
 
 def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
-    from agi_runtime.context_unrolling import ContextPrimitive, ContextUnrollingController, ContextWorkspace
+    from agi_runtime.context_unrolling import (
+        ContextPrimitive,
+        ContextUnrollingController,
+        ContextWorkspace,
+        extract_goal_artifact_references,
+    )
 
     primitives = [
         ContextPrimitive(name="extract_constraints", produces="text_constraints", task_types={"coding", "business", "research", "operations", "any"}),
@@ -583,6 +588,9 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
     )
     controller = ContextUnrollingController(primitives=primitives, max_primitives=max_primitives)
     selected = controller.select(task_type=task_type, workspace=workspace)
+    artifact_result = extract_goal_artifact_references(goal)
+    if artifact_result.content["files"] or artifact_result.content["tests"]:
+        workspace.record_result(source="primitive:extract_goal_artifact_references", result=artifact_result)
     workspace.add(
         item_type="primitive_selection",
         content={"selected": [primitive.name for primitive in selected]},

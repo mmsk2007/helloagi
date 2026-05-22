@@ -7,7 +7,7 @@
 - `helloagi auto --goal "..." --steps <n>`
 - `helloagi tri-loop --goal "..."`
 - `helloagi openclaw --prompt "..."`
-- `helloagi context-plan --goal "Fix checkout bug" --task-type coding` — show a Context Unrolling plan: selected task-relevant primitives, typed workspace summary with provenance/confidence/observed/generated/verified state, and high-risk action gate
+- `helloagi context-plan --goal "Fix tests/test_cli_contract.py::TestCLIContract::test_context_plan and src/agi_runtime/cli.py" --task-type coding` — show a Context Unrolling plan: selected task-relevant primitives, typed workspace summary with provenance/confidence/observed/generated/verified state, observed file/test artifact references, and high-risk action gate
 - `helloagi context-plan --goal "Delete temp build artifacts after confirming scope" --task-type operations` — show risk-identification and scope-verification primitives before high-risk operational actions
 
 ## Service and health

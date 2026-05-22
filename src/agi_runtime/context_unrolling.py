@@ -10,6 +10,7 @@ source-tagged, confidence-scored, and separated from verified evidence.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
@@ -153,6 +154,41 @@ class ContextWorkspace:
             "inputs_count": len(self.inputs),
             "items": items,
         }
+
+
+_RELATIVE_ARTIFACT_RE = re.compile(
+    r"(?<![\w./-])"
+    r"((?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\.(?:py|md|txt|json|yaml|yml|toml|ini|cfg)"
+    r"(?:::[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)?)?)"
+)
+
+
+def extract_goal_artifact_references(goal: str) -> PrimitiveResult:
+    """Extract public-safe file/test references mentioned in a user goal.
+
+    This lightweight Context Unrolling primitive adapter converts raw prompt
+    text into typed observed workspace evidence without reading file contents or
+    exposing absolute/local runtime paths.
+    """
+
+    files: list[str] = []
+    tests: list[str] = []
+    for match in _RELATIVE_ARTIFACT_RE.finditer(goal):
+        reference = match.group(1)
+        file_part = reference.split("::", 1)[0]
+        if file_part not in files:
+            files.append(file_part)
+        if "::" in reference and reference not in tests:
+            tests.append(reference)
+
+    return PrimitiveResult(
+        item_type="artifact_references",
+        content={"files": sorted(files), "tests": sorted(tests)},
+        confidence=1.0 if files or tests else 0.0,
+        observed=True,
+        verified=True,
+        relation="goal artifact mentions",
+    )
 
 
 class ContextUnrollingController:
