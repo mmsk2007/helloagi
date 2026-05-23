@@ -84,6 +84,11 @@ class TestCLIContract(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("artifact_references", result.stdout)
         self.assertIn("source=primitive:extract_goal_artifact_references", result.stdout)
+        self.assertIn("artifact_existence", result.stdout)
+        self.assertIn("source=primitive:verify_goal_artifact_references", result.stdout)
+        self.assertIn("items_count: 4", result.stdout)
+        self.assertIn("observed_items: 3", result.stdout)
+        self.assertIn("verified_items: 3", result.stdout)
         self.assertIn("observed=true", result.stdout)
         self.assertIn("verified=true", result.stdout)
 

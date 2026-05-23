@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Iterable
 from uuid import uuid4
 
@@ -188,6 +189,62 @@ def extract_goal_artifact_references(goal: str) -> PrimitiveResult:
         observed=True,
         verified=True,
         relation="goal artifact mentions",
+    )
+
+
+def verify_goal_artifact_references(goal: str, *, root: str | Path = ".") -> PrimitiveResult:
+    """Verify referenced artifacts exist without reading or leaking contents.
+
+    The result keeps only repo-relative references. It never records absolute
+    paths, file contents, runtime state, or path escapes outside ``root``.
+    """
+
+    references = extract_goal_artifact_references(goal).content
+    root_path = Path(root).resolve()
+    present_files: list[str] = []
+    missing_files: list[str] = []
+    present_tests: list[str] = []
+    missing_tests: list[str] = []
+
+    def is_safe_relative(reference: str) -> bool:
+        path = Path(reference)
+        return not path.is_absolute() and ".." not in path.parts
+
+    for file_ref in references["files"]:
+        if not is_safe_relative(file_ref):
+            continue
+        candidate = (root_path / file_ref).resolve()
+        try:
+            candidate.relative_to(root_path)
+        except ValueError:
+            continue
+        target = present_files if candidate.is_file() else missing_files
+        target.append(file_ref)
+
+    for test_ref in references["tests"]:
+        file_ref = test_ref.split("::", 1)[0]
+        if not is_safe_relative(file_ref):
+            continue
+        candidate = (root_path / file_ref).resolve()
+        try:
+            candidate.relative_to(root_path)
+        except ValueError:
+            continue
+        target = present_tests if candidate.is_file() else missing_tests
+        target.append(test_ref)
+
+    return PrimitiveResult(
+        item_type="artifact_existence",
+        content={
+            "present_files": sorted(present_files),
+            "missing_files": sorted(missing_files),
+            "present_tests": sorted(present_tests),
+            "missing_tests": sorted(missing_tests),
+        },
+        confidence=1.0 if references["files"] or references["tests"] else 0.0,
+        observed=True,
+        verified=True,
+        relation="repo-relative artifact existence check",
     )
 
 

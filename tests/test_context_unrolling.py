@@ -106,6 +106,44 @@ def test_extract_goal_artifact_references_records_public_safe_file_and_test_ment
     }
 
 
+def test_verify_goal_artifact_references_records_existence_without_absolute_paths(tmp_path):
+    from agi_runtime.context_unrolling import verify_goal_artifact_references
+
+    existing = tmp_path / "src" / "agi_runtime" / "cli.py"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("print('hello')\n", encoding="utf-8")
+
+    result = verify_goal_artifact_references(
+        "Check src/agi_runtime/cli.py and tests/missing_test.py::test_missing",
+        root=tmp_path,
+    )
+
+    assert result.item_type == "artifact_existence"
+    assert result.observed is True
+    assert result.verified is True
+    assert result.content == {
+        "present_files": ["src/agi_runtime/cli.py"],
+        "missing_files": ["tests/missing_test.py"],
+        "present_tests": [],
+        "missing_tests": ["tests/missing_test.py::test_missing"],
+    }
+    assert str(tmp_path) not in repr(result.content)
+
+
+def test_verify_goal_artifact_references_ignores_absolute_and_parent_escape_paths(tmp_path):
+    from agi_runtime.context_unrolling import verify_goal_artifact_references
+
+    result = verify_goal_artifact_references(
+        "Do not capture /home/user/private.py or ../outside.py but do capture docs/context-unrolling.md",
+        root=tmp_path,
+    )
+
+    assert result.content["present_files"] == []
+    assert result.content["missing_files"] == ["docs/context-unrolling.md"]
+    assert "/home/user/private.py" not in repr(result.content)
+    assert "../outside.py" not in repr(result.content)
+
+
 def test_workspace_summary_omits_content_by_default_and_can_include_it():
     workspace = ContextWorkspace(goal="Audit runtime evidence")
     workspace.add(

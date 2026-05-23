@@ -562,6 +562,7 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         ContextUnrollingController,
         ContextWorkspace,
         extract_goal_artifact_references,
+        verify_goal_artifact_references,
     )
 
     primitives = [
@@ -591,6 +592,8 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
     artifact_result = extract_goal_artifact_references(goal)
     if artifact_result.content["files"] or artifact_result.content["tests"]:
         workspace.record_result(source="primitive:extract_goal_artifact_references", result=artifact_result)
+        existence_result = verify_goal_artifact_references(goal)
+        workspace.record_result(source="primitive:verify_goal_artifact_references", result=existence_result)
     workspace.add(
         item_type="primitive_selection",
         content={"selected": [primitive.name for primitive in selected]},
