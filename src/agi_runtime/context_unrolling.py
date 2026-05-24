@@ -248,6 +248,54 @@ def verify_goal_artifact_references(goal: str, *, root: str | Path = ".") -> Pri
     )
 
 
+def summarize_goal_artifact_metadata(goal: str, *, root: str | Path = ".") -> PrimitiveResult:
+    """Record content-safe metadata for referenced artifacts.
+
+    This primitive reads only public-safe file metadata for repo-relative paths:
+    path, byte size, line count, and artifact kind. It never stores file contents,
+    absolute paths, or path escapes outside ``root``.
+    """
+
+    references = extract_goal_artifact_references(goal).content
+    existence = verify_goal_artifact_references(goal, root=root).content
+    root_path = Path(root).resolve()
+    files: list[dict[str, Any]] = []
+    unreadable_files: list[str] = []
+
+    for file_ref in existence["present_files"]:
+        candidate = (root_path / file_ref).resolve()
+        try:
+            candidate.relative_to(root_path)
+        except ValueError:
+            continue
+        if not candidate.is_file():
+            continue
+        try:
+            data = candidate.read_bytes()
+        except OSError:
+            unreadable_files.append(file_ref)
+            continue
+        files.append({
+            "path": file_ref,
+            "bytes": len(data),
+            "lines": data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0),
+            "kind": "test" if file_ref.startswith("tests/") else "file",
+        })
+
+    return PrimitiveResult(
+        item_type="artifact_metadata",
+        content={
+            "files": sorted(files, key=lambda item: item["path"]),
+            "missing_files": list(existence["missing_files"]),
+            "unreadable_files": sorted(unreadable_files),
+        },
+        confidence=1.0 if references["files"] or references["tests"] else 0.0,
+        observed=True,
+        verified=True,
+        relation="repo-relative artifact metadata without content",
+    )
+
+
 class ContextUnrollingController:
     """Budget-aware selector for task-relevant context primitives."""
 

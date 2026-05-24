@@ -144,6 +144,63 @@ def test_verify_goal_artifact_references_ignores_absolute_and_parent_escape_path
     assert "../outside.py" not in repr(result.content)
 
 
+def test_summarize_goal_artifact_metadata_records_counts_without_content(tmp_path):
+    from agi_runtime.context_unrolling import summarize_goal_artifact_metadata
+
+    existing = tmp_path / "src" / "agi_runtime" / "cli.py"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("first line\nsecond line\n", encoding="utf-8")
+
+    result = summarize_goal_artifact_metadata(
+        "Inspect src/agi_runtime/cli.py and tests/missing_test.py::test_missing",
+        root=tmp_path,
+    )
+
+    assert result.item_type == "artifact_metadata"
+    assert result.observed is True
+    assert result.verified is True
+    assert result.content == {
+        "files": [
+            {
+                "path": "src/agi_runtime/cli.py",
+                "bytes": len("first line\nsecond line\n".encode("utf-8")),
+                "lines": 2,
+                "kind": "file",
+            }
+        ],
+        "missing_files": ["tests/missing_test.py"],
+        "unreadable_files": [],
+    }
+    assert "first line" not in repr(result.content)
+    assert str(tmp_path) not in repr(result.content)
+
+
+def test_summarize_goal_artifact_metadata_degrades_when_file_read_fails(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from agi_runtime.context_unrolling import summarize_goal_artifact_metadata
+
+    existing = tmp_path / "src" / "agi_runtime" / "cli.py"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("first line\n", encoding="utf-8")
+    original_read_bytes = Path.read_bytes
+
+    def flaky_read_bytes(path):
+        if path == existing:
+            raise OSError("permission denied")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", flaky_read_bytes)
+
+    result = summarize_goal_artifact_metadata("Inspect src/agi_runtime/cli.py", root=tmp_path)
+
+    assert result.content == {
+        "files": [],
+        "missing_files": [],
+        "unreadable_files": ["src/agi_runtime/cli.py"],
+    }
+
+
 def test_workspace_summary_omits_content_by_default_and_can_include_it():
     workspace = ContextWorkspace(goal="Audit runtime evidence")
     workspace.add(

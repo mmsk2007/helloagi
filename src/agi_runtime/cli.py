@@ -562,6 +562,7 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         ContextUnrollingController,
         ContextWorkspace,
         extract_goal_artifact_references,
+        summarize_goal_artifact_metadata,
         verify_goal_artifact_references,
     )
 
@@ -594,6 +595,8 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         workspace.record_result(source="primitive:extract_goal_artifact_references", result=artifact_result)
         existence_result = verify_goal_artifact_references(goal)
         workspace.record_result(source="primitive:verify_goal_artifact_references", result=existence_result)
+        metadata_result = summarize_goal_artifact_metadata(goal)
+        workspace.record_result(source="primitive:summarize_goal_artifact_metadata", result=metadata_result)
     workspace.add(
         item_type="primitive_selection",
         content={"selected": [primitive.name for primitive in selected]},
