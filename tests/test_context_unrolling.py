@@ -201,6 +201,100 @@ def test_summarize_goal_artifact_metadata_degrades_when_file_read_fails(tmp_path
     }
 
 
+def test_collect_goal_pytest_references_records_collect_status_without_output_content(tmp_path):
+    from agi_runtime.context_unrolling import collect_goal_pytest_references
+
+    test_file = tmp_path / "tests" / "test_sample.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "def test_ok():\n"
+        "    assert True\n",
+        encoding="utf-8",
+    )
+
+    result = collect_goal_pytest_references(
+        "Collect tests/test_sample.py::test_ok and tests/missing_test.py::test_missing",
+        root=tmp_path,
+    )
+
+    assert result.item_type == "pytest_collection"
+    assert result.observed is True
+    assert result.verified is True
+    assert result.content == {
+        "tests": [
+            {
+                "reference": "tests/missing_test.py::test_missing",
+                "status": "missing_file",
+                "collected_count": 0,
+            },
+            {
+                "reference": "tests/test_sample.py::test_ok",
+                "status": "collected",
+                "collected_count": 1,
+            },
+        ],
+        "skipped": [],
+    }
+    assert "assert True" not in repr(result.content)
+    assert str(tmp_path) not in repr(result.content)
+
+
+def test_collect_goal_pytest_references_counts_parameterized_nodes_statically(tmp_path):
+    from agi_runtime.context_unrolling import collect_goal_pytest_references
+
+    test_file = tmp_path / "tests" / "test_params.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "import pytest\n\n"
+        "@pytest.mark.parametrize('value', [1, 2, 3])\n"
+        "def test_value(value):\n"
+        "    assert value\n",
+        encoding="utf-8",
+    )
+
+    result = collect_goal_pytest_references("Collect tests/test_params.py::test_value", root=tmp_path)
+
+    assert result.content["tests"] == [
+        {
+            "reference": "tests/test_params.py::test_value",
+            "status": "collected",
+            "collected_count": 3,
+        }
+    ]
+    assert "assert value" not in repr(result.content)
+
+
+def test_collect_goal_pytest_references_does_not_mark_non_tests_collected(tmp_path):
+    from agi_runtime.context_unrolling import collect_goal_pytest_references
+
+    test_file = tmp_path / "tests" / "test_helpers.py"
+    test_file.parent.mkdir(parents=True)
+    test_file.write_text(
+        "def helper():\n"
+        "    return True\n\n"
+        "class HelperClass:\n"
+        "    def test_method_name_but_not_test_class(self):\n"
+        "        return True\n\n"
+        "class TestContainer:\n"
+        "    def helper_method(self):\n"
+        "        return True\n",
+        encoding="utf-8",
+    )
+
+    result = collect_goal_pytest_references(
+        "Collect tests/test_helpers.py::helper "
+        "tests/test_helpers.py::HelperClass::test_method_name_but_not_test_class "
+        "tests/test_helpers.py::TestContainer::helper_method",
+        root=tmp_path,
+    )
+
+    assert result.content["tests"] == [
+        {"reference": "tests/test_helpers.py::HelperClass::test_method_name_but_not_test_class", "status": "not_collected", "collected_count": 0},
+        {"reference": "tests/test_helpers.py::TestContainer::helper_method", "status": "not_collected", "collected_count": 0},
+        {"reference": "tests/test_helpers.py::helper", "status": "not_collected", "collected_count": 0},
+    ]
+
+
 def test_workspace_summary_omits_content_by_default_and_can_include_it():
     workspace = ContextWorkspace(goal="Audit runtime evidence")
     workspace.add(

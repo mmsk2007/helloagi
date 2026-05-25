@@ -10,6 +10,7 @@ source-tagged, confidence-scored, and separated from verified evidence.
 
 from __future__ import annotations
 
+import ast
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -293,6 +294,121 @@ def summarize_goal_artifact_metadata(goal: str, *, root: str | Path = ".") -> Pr
         observed=True,
         verified=True,
         relation="repo-relative artifact metadata without content",
+    )
+
+
+def collect_goal_pytest_references(goal: str, *, root: str | Path = ".") -> PrimitiveResult:
+    """Resolve referenced pytest node ids without executing repository code.
+
+    This primitive uses a static AST scan for repo-relative pytest references.
+    It records only references, compact statuses, and counts; it does not run
+    pytest collection, import test modules, store file contents, or record
+    absolute paths/tracebacks.
+    """
+
+    def parameter_count(function: ast.FunctionDef | ast.AsyncFunctionDef) -> int:
+        count = 1
+        for decorator in function.decorator_list:
+            call = decorator if isinstance(decorator, ast.Call) else None
+            if call is None:
+                continue
+            target = call.func
+            if not isinstance(target, ast.Attribute) or target.attr != "parametrize":
+                continue
+            if len(call.args) < 2:
+                continue
+            values = call.args[1]
+            if isinstance(values, (ast.List, ast.Tuple)):
+                count *= max(1, len(values.elts))
+        return count
+
+    def static_collect_count(candidate: Path, node_parts: list[str]) -> tuple[str, int]:
+        try:
+            tree = ast.parse(candidate.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            return "collection_error", 0
+        module_nodes = list(tree.body)
+        if not node_parts:
+            total = sum(
+                parameter_count(node)
+                for node in module_nodes
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")
+            )
+            total += sum(
+                parameter_count(child)
+                for node in module_nodes
+                if isinstance(node, ast.ClassDef) and node.name.startswith("Test")
+                for child in node.body
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name.startswith("test_")
+            )
+            return ("collected", total) if total else ("not_collected", 0)
+        first = node_parts[0]
+        top = next(
+            (
+                node
+                for node in module_nodes
+                if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == first
+            ),
+            None,
+        )
+        if isinstance(top, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if len(node_parts) == 1 and top.name.startswith("test_"):
+                return "collected", parameter_count(top)
+            return "not_collected", 0
+        if isinstance(top, ast.ClassDef):
+            if not top.name.startswith("Test"):
+                return "not_collected", 0
+            if len(node_parts) == 1:
+                total = sum(
+                    parameter_count(child)
+                    for child in top.body
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name.startswith("test_")
+                )
+                return ("collected", total) if total else ("not_collected", 0)
+            method_name = node_parts[1]
+            method = next(
+                (
+                    child
+                    for child in top.body
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == method_name
+                ),
+                None,
+            )
+            return ("collected", parameter_count(method)) if method is not None and method.name.startswith("test_") else ("not_collected", 0)
+        return "not_collected", 0
+
+    references = extract_goal_artifact_references(goal).content
+    existence = verify_goal_artifact_references(goal, root=root).content
+    root_path = Path(root).resolve()
+    present_test_files = {test_ref.split("::", 1)[0] for test_ref in existence["present_tests"]}
+    tests: list[dict[str, Any]] = []
+    skipped: list[str] = []
+
+    for test_ref in sorted(references["tests"]):
+        file_ref, _, node_ref = test_ref.partition("::")
+        path = Path(file_ref)
+        if path.is_absolute() or ".." in path.parts:
+            skipped.append(test_ref)
+            continue
+        candidate = (root_path / file_ref).resolve()
+        try:
+            candidate.relative_to(root_path)
+        except ValueError:
+            skipped.append(test_ref)
+            continue
+        if file_ref not in present_test_files:
+            tests.append({"reference": test_ref, "status": "missing_file", "collected_count": 0})
+            continue
+        status, collected_count = static_collect_count(candidate, node_ref.split("::") if node_ref else [])
+        tests.append({"reference": test_ref, "status": status, "collected_count": collected_count})
+
+    return PrimitiveResult(
+        item_type="pytest_collection",
+        content={"tests": tests, "skipped": sorted(skipped)},
+        confidence=1.0 if references["tests"] else 0.0,
+        observed=True,
+        verified=True,
+        relation="repo-relative static pytest node check without output",
     )
 
 

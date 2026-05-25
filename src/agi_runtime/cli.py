@@ -561,6 +561,7 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         ContextPrimitive,
         ContextUnrollingController,
         ContextWorkspace,
+        collect_goal_pytest_references,
         extract_goal_artifact_references,
         summarize_goal_artifact_metadata,
         verify_goal_artifact_references,
@@ -597,6 +598,9 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         workspace.record_result(source="primitive:verify_goal_artifact_references", result=existence_result)
         metadata_result = summarize_goal_artifact_metadata(goal)
         workspace.record_result(source="primitive:summarize_goal_artifact_metadata", result=metadata_result)
+        collection_result = collect_goal_pytest_references(goal)
+        if collection_result.content["tests"] or collection_result.content["skipped"]:
+            workspace.record_result(source="primitive:collect_goal_pytest_references", result=collection_result)
     workspace.add(
         item_type="primitive_selection",
         content={"selected": [primitive.name for primitive in selected]},
