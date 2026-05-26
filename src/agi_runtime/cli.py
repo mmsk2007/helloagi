@@ -632,7 +632,10 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         f"  verified_items: {verified_count}",
         "  items:",
     ])
+    has_pytest_collection = False
     for item in summary["items"]:
+        if item["type"] == "pytest_collection":
+            has_pytest_collection = True
         lines.append(
             "  - "
             f"{item['type']} source={item['source']} "
@@ -640,6 +643,8 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
             f"observed={str(item['observed']).lower()} "
             f"verified={str(item['verified']).lower()}"
         )
+    if has_pytest_collection:
+        lines.append("pytest_collection_note: static Python-test check; parameterized brackets are counted at the base node")
     lines.append("action_gate: high-risk actions require verified generated context")
     return "\n".join(lines)
 

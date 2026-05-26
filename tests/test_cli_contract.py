@@ -90,6 +90,7 @@ class TestCLIContract(unittest.TestCase):
         self.assertIn("source=primitive:summarize_goal_artifact_metadata", result.stdout)
         self.assertIn("pytest_collection", result.stdout)
         self.assertIn("source=primitive:collect_goal_pytest_references", result.stdout)
+        self.assertIn("pytest_collection_note: static Python-test check; parameterized brackets are counted at the base node", result.stdout)
         self.assertIn("items_count: 6", result.stdout)
         self.assertIn("observed_items: 5", result.stdout)
         self.assertIn("verified_items: 5", result.stdout)
