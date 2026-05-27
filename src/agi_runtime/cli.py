@@ -562,6 +562,7 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         ContextUnrollingController,
         ContextWorkspace,
         collect_goal_pytest_references,
+        evaluate_action_readiness,
         extract_goal_artifact_references,
         summarize_goal_artifact_metadata,
         verify_goal_artifact_references,
@@ -575,7 +576,7 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         ContextPrimitive(name="ocr", produces="visual_text", task_types={"browser", "document", "visual"}),
         ContextPrimitive(name="layout_graph", produces="ui_layout", task_types={"browser"}),
         ContextPrimitive(name="identify_action_risk", produces="action_risk", task_types={"operations"}),
-        ContextPrimitive(name="verify_scope", produces="scope_evidence", task_types={"operations"}),
+        ContextPrimitive(name="verify_scope", produces="scope", task_types={"operations"}),
         ContextPrimitive(name="estimate_depth", produces="geometry_context", task_types={"spatial", "robotics", "visual"}),
         ContextPrimitive(name="verify_consistency", produces="verification", task_types={"coding", "browser", "research", "business", "operations", "any"}, cost=2),
     ]
@@ -645,7 +646,10 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
         )
     if has_pytest_collection:
         lines.append("pytest_collection_note: static Python-test check; parameterized brackets are counted at the base node")
-    lines.append("action_gate: high-risk actions require verified generated context")
+    readiness = evaluate_action_readiness(workspace, risk="high")
+    lines.append(f"action_gate: {readiness.summary}")
+    if readiness.required_evidence:
+        lines.append(f"action_gate_required_evidence: {', '.join(readiness.required_evidence)}")
     return "\n".join(lines)
 
 

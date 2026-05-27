@@ -153,7 +153,10 @@ class TestPromptContracts(unittest.TestCase):
             event = json.loads((tmp / "events.jsonl").read_text().splitlines()[0])
             payload = event["payload"]
             self.assertTrue(payload["action_ready"])
+            self.assertEqual(payload["action_gate"], "ready")
             item_types = [item["type"] for item in payload["workspace"]["items"]]
+            self.assertIn("action_risk", item_types)
+            self.assertIn("scope", item_types)
             self.assertIn("user_approval_verification", item_types)
             generated = next(item for item in payload["workspace"]["items"] if item["type"] == "generated_tool_call")
             self.assertTrue(generated["verified"])

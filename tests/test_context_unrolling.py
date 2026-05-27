@@ -4,6 +4,7 @@ from agi_runtime.context_unrolling import (
     ContextWorkspace,
     PrimitiveResult,
     WorkspaceItem,
+    evaluate_action_readiness,
 )
 
 
@@ -293,6 +294,72 @@ def test_collect_goal_pytest_references_does_not_mark_non_tests_collected(tmp_pa
         {"reference": "tests/test_helpers.py::TestContainer::helper_method", "status": "not_collected", "collected_count": 0},
         {"reference": "tests/test_helpers.py::helper", "status": "not_collected", "collected_count": 0},
     ]
+
+
+def test_evaluate_action_readiness_blocks_high_risk_without_verified_scope_and_risk():
+    workspace = ContextWorkspace(goal="Delete temporary files")
+    workspace.add(
+        item_type="user_goal",
+        content={"summary": "Delete temporary files"},
+        source="cli",
+        confidence=1.0,
+        observed=True,
+        verified=True,
+    )
+    workspace.add(
+        item_type="predicted_action_result",
+        content="The deletion only affects tmp files",
+        source="planner",
+        confidence=0.7,
+        observed=False,
+        verified=False,
+    )
+
+    readiness = evaluate_action_readiness(workspace, risk="high")
+
+    assert readiness.ready is False
+    assert readiness.risk == "high"
+    assert readiness.blockers == [
+        "unverified_generated_context",
+        "missing_verified_action_risk",
+        "missing_verified_scope",
+    ]
+    assert readiness.required_evidence == ["action_risk", "scope"]
+    assert readiness.summary == "blocked: unverified generated context; missing verified action risk; missing verified scope"
+
+
+def test_evaluate_action_readiness_allows_high_risk_with_verified_workspace_evidence():
+    workspace = ContextWorkspace(goal="Delete temporary files")
+    workspace.add(
+        item_type="predicted_action_result",
+        content="The deletion only affects tmp files",
+        source="planner",
+        confidence=0.7,
+        observed=False,
+        verified=True,
+    )
+    workspace.add(
+        item_type="action_risk",
+        content={"risk": "high"},
+        source="primitive:identify_action_risk",
+        confidence=0.9,
+        observed=True,
+        verified=True,
+    )
+    workspace.add(
+        item_type="scope",
+        content={"allowed_paths": ["tmp/"]},
+        source="primitive:verify_scope",
+        confidence=0.9,
+        observed=True,
+        verified=True,
+    )
+
+    readiness = evaluate_action_readiness(workspace, risk="high")
+
+    assert readiness.ready is True
+    assert readiness.blockers == []
+    assert readiness.summary == "ready"
 
 
 def test_workspace_summary_omits_content_by_default_and_can_include_it():

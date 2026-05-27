@@ -35,7 +35,7 @@ from agi_runtime.config.providers import (
     resolve_provider_credential,
 )
 from agi_runtime.config.settings import RuntimeSettings
-from agi_runtime.context_unrolling import ContextWorkspace
+from agi_runtime.context_unrolling import ContextWorkspace, evaluate_action_readiness
 from agi_runtime.tools.registry import (
     ToolRegistry,
     ToolResult,
@@ -571,6 +571,24 @@ class HelloAGIAgent:
             relation="verification",
         )
         workspace.add(
+            item_type="action_risk",
+            content={"decision": decision, "risk": risk},
+            source="srg",
+            confidence=1.0,
+            observed=True,
+            verified=action_verified,
+            relation="action_gate",
+        )
+        workspace.add(
+            item_type="scope",
+            content={"tool": tool_name, "input_keys": sorted(str(k) for k in tool_input.keys())},
+            source="tool_schema",
+            confidence=0.8,
+            observed=True,
+            verified=action_verified,
+            relation="action_gate",
+        )
+        workspace.add(
             item_type="tool_evidence",
             content={"tool": tool_name, "ok": result_ok, "output_chars": len(result_text or "")},
             source=f"tool:{tool_name}",
@@ -579,14 +597,17 @@ class HelloAGIAgent:
             verified=result_ok,
             relation="execution_result",
         )
+        readiness = evaluate_action_readiness(
+            workspace,
+            risk="high" if decision == "escalate" or risk >= 0.35 else "low",
+        )
         self.journal.write(
             "context_workspace_tool_evidence",
             {
                 "provider": provider,
                 "tool": tool_name,
-                "action_ready": workspace.ready_for_action(
-                    risk="high" if decision == "escalate" or risk >= 0.35 else "low"
-                ),
+                "action_ready": readiness.ready,
+                "action_gate": readiness.summary,
                 "workspace": workspace.summarize(include_content=True),
             },
         )

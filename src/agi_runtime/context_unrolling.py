@@ -57,6 +57,17 @@ class PrimitiveResult:
 
 
 @dataclass(frozen=True)
+class ActionReadiness:
+    """Machine-checkable context gate decision before an agent action."""
+
+    risk: str
+    ready: bool
+    blockers: list[str]
+    required_evidence: list[str]
+    summary: str
+
+
+@dataclass(frozen=True)
 class ContextPrimitive:
     """Metadata for a primitive the controller may activate."""
 
@@ -131,10 +142,7 @@ class ContextWorkspace:
         actions may proceed while still carrying provenance into the final answer.
         """
 
-        normalized = risk.lower().strip()
-        if normalized in {"high", "critical", "destructive", "irreversible"}:
-            return not self.has_unverified_generated_context()
-        return True
+        return evaluate_action_readiness(self, risk=risk).ready
 
     def summarize(self, *, include_content: bool = False) -> dict[str, Any]:
         items = []
@@ -156,6 +164,41 @@ class ContextWorkspace:
             "inputs_count": len(self.inputs),
             "items": items,
         }
+
+
+def evaluate_action_readiness(workspace: ContextWorkspace, *, risk: str) -> ActionReadiness:
+    """Evaluate whether typed workspace evidence is sufficient before acting.
+
+    Low-risk actions may proceed with provenance only. High-risk actions require
+    no unverified generated assumptions plus verified risk and scope evidence so
+    callers can enforce the Context Unrolling action gate mechanically instead
+    of relying on prompt text alone.
+    """
+
+    normalized = risk.lower().strip()
+    high_risk = normalized in {"high", "critical", "destructive", "irreversible"}
+    required_evidence = ["action_risk", "scope"] if high_risk else []
+    blockers: list[str] = []
+
+    if high_risk and workspace.has_unverified_generated_context():
+        blockers.append("unverified_generated_context")
+    for item_type in required_evidence:
+        if not any(item.verified for item in workspace.by_type(item_type)):
+            blockers.append(f"missing_verified_{item_type}")
+
+    labels = {
+        "unverified_generated_context": "unverified generated context",
+        "missing_verified_action_risk": "missing verified action risk",
+        "missing_verified_scope": "missing verified scope",
+    }
+    summary = "ready" if not blockers else "blocked: " + "; ".join(labels.get(blocker, blocker) for blocker in blockers)
+    return ActionReadiness(
+        risk=normalized,
+        ready=not blockers,
+        blockers=blockers,
+        required_evidence=required_evidence,
+        summary=summary,
+    )
 
 
 _RELATIVE_ARTIFACT_RE = re.compile(
