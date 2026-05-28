@@ -35,7 +35,7 @@ from agi_runtime.config.providers import (
     resolve_provider_credential,
 )
 from agi_runtime.config.settings import RuntimeSettings
-from agi_runtime.context_unrolling import ContextWorkspace, evaluate_action_readiness
+from agi_runtime.context_unrolling import ActionReadiness, ContextWorkspace, evaluate_action_readiness
 from agi_runtime.tools.registry import (
     ToolRegistry,
     ToolResult,
@@ -500,22 +500,15 @@ class HelloAGIAgent:
             })
         return out
 
-    def _record_tool_context_workspace(
+    def _build_tool_context_workspace(
         self,
         *,
         user_input: str,
         tool_call: ToolCall | Dict[str, Any],
         tool_governance: Any,
-        result: ToolResult | Any,
-        provider: str,
         user_approved: bool = False,
-    ) -> None:
-        """Journal typed context-unrolling evidence for an executed tool call.
-
-        The event records observed input, generated tool intent, SRG verification,
-        and tool evidence without copying full prompt/tool values into a second
-        payload. This makes provenance auditable while keeping logs compact.
-        """
+    ) -> ContextWorkspace:
+        """Build typed pre-action context evidence for a proposed tool call."""
         if isinstance(tool_call, dict):
             tool_name = str(tool_call.get("name", ""))
             tool_input = tool_call.get("input") if isinstance(tool_call.get("input"), dict) else {}
@@ -525,8 +518,6 @@ class HelloAGIAgent:
 
         decision = str(getattr(tool_governance, "decision", "unknown"))
         risk = float(getattr(tool_governance, "risk", 0.0) or 0.0)
-        result_ok = bool(getattr(result, "ok", False))
-        result_text = result.to_content() if hasattr(result, "to_content") else str(result)
         action_verified = decision == "allow" or (decision == "escalate" and bool(user_approved))
 
         workspace = ContextWorkspace(
@@ -588,6 +579,59 @@ class HelloAGIAgent:
             verified=action_verified,
             relation="action_gate",
         )
+        return workspace
+
+    def _evaluate_tool_context_action_gate(
+        self,
+        *,
+        user_input: str,
+        tool_call: ToolCall | Dict[str, Any],
+        tool_governance: Any,
+        user_approved: bool = False,
+    ) -> ActionReadiness:
+        """Mechanically evaluate Context Unrolling readiness before execution."""
+        risk = float(getattr(tool_governance, "risk", 0.0) or 0.0)
+        decision = str(getattr(tool_governance, "decision", "unknown"))
+        workspace = self._build_tool_context_workspace(
+            user_input=user_input,
+            tool_call=tool_call,
+            tool_governance=tool_governance,
+            user_approved=user_approved,
+        )
+        return evaluate_action_readiness(
+            workspace,
+            risk="high" if decision == "escalate" or risk >= 0.35 else "low",
+        )
+
+    def _record_tool_context_workspace(
+        self,
+        *,
+        user_input: str,
+        tool_call: ToolCall | Dict[str, Any],
+        tool_governance: Any,
+        result: ToolResult | Any,
+        provider: str,
+        user_approved: bool = False,
+    ) -> None:
+        """Journal typed context-unrolling evidence for an executed tool call.
+
+        The event records observed input, generated tool intent, SRG verification,
+        and tool evidence without copying full prompt/tool values into a second
+        payload. This makes provenance auditable while keeping logs compact.
+        """
+        if isinstance(tool_call, dict):
+            tool_name = str(tool_call.get("name", ""))
+        else:
+            tool_name = tool_call.name
+
+        result_ok = bool(getattr(result, "ok", False))
+        result_text = result.to_content() if hasattr(result, "to_content") else str(result)
+        workspace = self._build_tool_context_workspace(
+            user_input=user_input,
+            tool_call=tool_call,
+            tool_governance=tool_governance,
+            user_approved=user_approved,
+        )
         workspace.add(
             item_type="tool_evidence",
             content={"tool": tool_name, "ok": result_ok, "output_chars": len(result_text or "")},
@@ -597,9 +641,11 @@ class HelloAGIAgent:
             verified=result_ok,
             relation="execution_result",
         )
-        readiness = evaluate_action_readiness(
-            workspace,
-            risk="high" if decision == "escalate" or risk >= 0.35 else "low",
+        readiness = self._evaluate_tool_context_action_gate(
+            user_input=user_input,
+            tool_call=tool_call,
+            tool_governance=tool_governance,
+            user_approved=user_approved,
         )
         self.journal.write(
             "context_workspace_tool_evidence",
@@ -1992,6 +2038,28 @@ class HelloAGIAgent:
                         self.on_tool_end(tc.name, False, result_content)
                     continue
 
+                context_readiness = self._evaluate_tool_context_action_gate(
+                    user_input=user_input,
+                    tool_call=tc,
+                    tool_governance=tool_gov,
+                    user_approved=user_approved,
+                )
+                if not context_readiness.ready:
+                    result_content = f"🛑 BLOCKED by Context Unrolling action gate: {context_readiness.summary}"
+                    self.journal.write("context_action_gate_blocked", {
+                        "tool": tc.name,
+                        "risk": tool_gov.risk,
+                        "blockers": context_readiness.blockers,
+                    })
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": result_content,
+                    })
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
                 result = await self._execute_tool(tc.name, tc.input)
 
                 if result.ok:
@@ -2417,6 +2485,28 @@ class HelloAGIAgent:
                         "tool": tc.name,
                         "failures": cb_status["failures"],
                         "short_circuited": cb_status["short_circuited"],
+                    })
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tc.id,
+                        "content": result_content,
+                    })
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
+                context_readiness = self._evaluate_tool_context_action_gate(
+                    user_input=user_input,
+                    tool_call=tc,
+                    tool_governance=tool_gov,
+                    user_approved=user_approved,
+                )
+                if not context_readiness.ready:
+                    result_content = f"🛑 BLOCKED by Context Unrolling action gate: {context_readiness.summary}"
+                    self.journal.write("context_action_gate_blocked", {
+                        "tool": tc.name,
+                        "risk": tool_gov.risk,
+                        "blockers": context_readiness.blockers,
                     })
                     tool_results.append({
                         "type": "tool_result",
@@ -3040,6 +3130,28 @@ class HelloAGIAgent:
                         f"{cb_status['failures']} consecutive failures. "
                         f"Will retry after cooldown."
                     )
+                    tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": result_content})
+                    func_response_parts.append(
+                        gtypes.Part.from_function_response(name=tc.name, response={"result": result_content})
+                    )
+                    if self.on_tool_end:
+                        self.on_tool_end(tc.name, False, result_content)
+                    continue
+
+                context_readiness = self._evaluate_tool_context_action_gate(
+                    user_input=user_input,
+                    tool_call=tc,
+                    tool_governance=tool_gov,
+                    user_approved=user_approved,
+                )
+                if not context_readiness.ready:
+                    result_content = f"🛑 BLOCKED by Context Unrolling action gate: {context_readiness.summary}"
+                    self.journal.write("context_action_gate_blocked", {
+                        "tool": tc.name,
+                        "risk": tool_gov.risk,
+                        "blockers": context_readiness.blockers,
+                        "provider": "google",
+                    })
                     tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": result_content})
                     func_response_parts.append(
                         gtypes.Part.from_function_response(name=tc.name, response={"result": result_content})

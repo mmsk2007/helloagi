@@ -164,6 +164,50 @@ class TestPromptContracts(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_context_action_gate_blocks_unapproved_escalated_tool_before_execution(self):
+        tmp = _make_scratch_dir()
+        try:
+            agent = self._make_agent(tmp)
+
+            class Governance:
+                decision = "escalate"
+                risk = 0.72
+
+            readiness = agent._evaluate_tool_context_action_gate(
+                user_input="Update the selected config file after approval.",
+                tool_call={"name": "file_write", "input": {"path": "public/config.toml", "content": "safe"}},
+                tool_governance=Governance(),
+                user_approved=False,
+            )
+
+            self.assertFalse(readiness.ready)
+            self.assertIn("unverified_generated_context", readiness.blockers)
+            self.assertIn("missing_verified_action_risk", readiness.blockers)
+            self.assertIn("missing_verified_scope", readiness.blockers)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_context_action_gate_allows_approved_escalated_tool_before_execution(self):
+        tmp = _make_scratch_dir()
+        try:
+            agent = self._make_agent(tmp)
+
+            class Governance:
+                decision = "escalate"
+                risk = 0.72
+
+            readiness = agent._evaluate_tool_context_action_gate(
+                user_input="Update the selected config file after approval.",
+                tool_call={"name": "file_write", "input": {"path": "public/config.toml", "content": "safe"}},
+                tool_governance=Governance(),
+                user_approved=True,
+            )
+
+            self.assertTrue(readiness.ready)
+            self.assertEqual(readiness.summary, "ready")
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def test_gemini_tool_execution_records_context_workspace_evidence(self):
         source = Path(HelloAGIAgent._think_async_gemini.__code__.co_filename).read_text()
         gemini_body = source[source.index("    async def _think_async_gemini"):]
