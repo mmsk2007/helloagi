@@ -2050,6 +2050,7 @@ class HelloAGIAgent:
                         "tool": tc.name,
                         "risk": tool_gov.risk,
                         "blockers": context_readiness.blockers,
+                        "provider": "anthropic",
                     })
                     tool_results.append({
                         "type": "tool_result",
@@ -2507,6 +2508,7 @@ class HelloAGIAgent:
                         "tool": tc.name,
                         "risk": tool_gov.risk,
                         "blockers": context_readiness.blockers,
+                        "provider": "openai",
                     })
                     tool_results.append({
                         "type": "tool_result",
