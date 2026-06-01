@@ -221,6 +221,40 @@ class TestPromptContracts(unittest.TestCase):
         self.assertIn("user_approved=user_approved", gemini_body)
         self.assertIn('"provider": "google"', gemini_body)
 
+    def test_context_action_gate_block_helper_returns_provider_payload(self):
+        tmp = _make_scratch_dir()
+        try:
+            agent = self._make_agent(tmp)
+            readiness = ActionReadiness(
+                risk="high",
+                ready=False,
+                blockers=["missing_verified_scope"],
+                required_evidence=["scope"],
+                summary="blocked: missing verified scope",
+            )
+            tool_result = agent._record_context_action_gate_block(
+                tool_call={"name": "file_write", "id": "toolu_gate"},
+                tool_risk=0.72,
+                provider="anthropic",
+                readiness=readiness,
+            )
+
+            self.assertEqual(tool_result["type"], "tool_result")
+            self.assertEqual(tool_result["tool_use_id"], "toolu_gate")
+            self.assertIn("Context Unrolling action gate", tool_result["content"])
+            blocked_events = [
+                json.loads(line) for line in (tmp / "events.jsonl").read_text().splitlines()
+                if '"kind": "context_action_gate_blocked"' in line
+            ]
+            self.assertEqual(blocked_events[0]["payload"], {
+                "tool": "file_write",
+                "risk": 0.72,
+                "blockers": ["missing_verified_scope"],
+                "provider": "anthropic",
+            })
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
     def _force_context_gate_block(self, agent: HelloAGIAgent) -> dict:
         calls = {"execute": 0}
 

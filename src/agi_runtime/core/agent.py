@@ -603,6 +603,35 @@ class HelloAGIAgent:
             risk="high" if decision == "escalate" or risk >= 0.35 else "low",
         )
 
+    def _record_context_action_gate_block(
+        self,
+        *,
+        tool_call: ToolCall | Dict[str, Any],
+        tool_risk: float,
+        provider: str,
+        readiness: ActionReadiness,
+    ) -> Dict[str, Any]:
+        """Journal a Context Unrolling gate block and return an LLM-facing tool result."""
+        if isinstance(tool_call, dict):
+            tool_name = str(tool_call.get("name", ""))
+            tool_id = str(tool_call.get("id", ""))
+        else:
+            tool_name = tool_call.name
+            tool_id = tool_call.id
+
+        result_content = f"🛑 BLOCKED by Context Unrolling action gate: {readiness.summary}"
+        self.journal.write("context_action_gate_blocked", {
+            "tool": tool_name,
+            "risk": tool_risk,
+            "blockers": readiness.blockers,
+            "provider": provider,
+        })
+        return {
+            "type": "tool_result",
+            "tool_use_id": tool_id,
+            "content": result_content,
+        }
+
     def _record_tool_context_workspace(
         self,
         *,
@@ -2045,20 +2074,15 @@ class HelloAGIAgent:
                     user_approved=user_approved,
                 )
                 if not context_readiness.ready:
-                    result_content = f"🛑 BLOCKED by Context Unrolling action gate: {context_readiness.summary}"
-                    self.journal.write("context_action_gate_blocked", {
-                        "tool": tc.name,
-                        "risk": tool_gov.risk,
-                        "blockers": context_readiness.blockers,
-                        "provider": "anthropic",
-                    })
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tc.id,
-                        "content": result_content,
-                    })
+                    gate_result = self._record_context_action_gate_block(
+                        tool_call=tc,
+                        tool_risk=tool_gov.risk,
+                        provider="anthropic",
+                        readiness=context_readiness,
+                    )
+                    tool_results.append(gate_result)
                     if self.on_tool_end:
-                        self.on_tool_end(tc.name, False, result_content)
+                        self.on_tool_end(tc.name, False, gate_result["content"])
                     continue
 
                 result = await self._execute_tool(tc.name, tc.input)
@@ -2503,20 +2527,15 @@ class HelloAGIAgent:
                     user_approved=user_approved,
                 )
                 if not context_readiness.ready:
-                    result_content = f"🛑 BLOCKED by Context Unrolling action gate: {context_readiness.summary}"
-                    self.journal.write("context_action_gate_blocked", {
-                        "tool": tc.name,
-                        "risk": tool_gov.risk,
-                        "blockers": context_readiness.blockers,
-                        "provider": "openai",
-                    })
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tc.id,
-                        "content": result_content,
-                    })
+                    gate_result = self._record_context_action_gate_block(
+                        tool_call=tc,
+                        tool_risk=tool_gov.risk,
+                        provider="openai",
+                        readiness=context_readiness,
+                    )
+                    tool_results.append(gate_result)
                     if self.on_tool_end:
-                        self.on_tool_end(tc.name, False, result_content)
+                        self.on_tool_end(tc.name, False, gate_result["content"])
                     continue
 
                 result = await self._execute_tool(tc.name, tc.input)
@@ -3147,19 +3166,18 @@ class HelloAGIAgent:
                     user_approved=user_approved,
                 )
                 if not context_readiness.ready:
-                    result_content = f"🛑 BLOCKED by Context Unrolling action gate: {context_readiness.summary}"
-                    self.journal.write("context_action_gate_blocked", {
-                        "tool": tc.name,
-                        "risk": tool_gov.risk,
-                        "blockers": context_readiness.blockers,
-                        "provider": "google",
-                    })
-                    tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": result_content})
+                    gate_result = self._record_context_action_gate_block(
+                        tool_call=tc,
+                        tool_risk=tool_gov.risk,
+                        provider="google",
+                        readiness=context_readiness,
+                    )
+                    tool_results.append(gate_result)
                     func_response_parts.append(
-                        gtypes.Part.from_function_response(name=tc.name, response={"result": result_content})
+                        gtypes.Part.from_function_response(name=tc.name, response={"result": gate_result["content"]})
                     )
                     if self.on_tool_end:
-                        self.on_tool_end(tc.name, False, result_content)
+                        self.on_tool_end(tc.name, False, gate_result["content"])
                     continue
 
                 result = await self._execute_tool(tc.name, tc.input)
