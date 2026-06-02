@@ -43,7 +43,11 @@ Build a production-grade, local-first AGI orchestration framework with governanc
 - Installation pathways
 - Benchmarks + public docs
 
+## Organism Intelligence Track
+
+Daily productization work must also follow the BioAgent organism plan in `docs/plans/bioagent-organism-intelligence-phases.md`. The track organizes HelloAGI as brain/cortex, nervous system, senses, effectors, immune system, memory, metabolism, circulatory spine, homeostasis, and growth systems. Each daily sprint should pick one PR-sized improvement from the earliest incomplete phase unless a higher-severity product-readiness blocker exists.
+
 ## Operating Cadence
-- Daily: implementation + tests
+- Daily: implementation + tests, including one organism-plan task where feasible
 - Every 3 days: tagged capability release
-- Weekly: benchmark report (latency/reliability/governance)
+- Weekly: benchmark report (latency/reliability/governance/organism health)
