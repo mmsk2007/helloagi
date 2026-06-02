@@ -95,6 +95,41 @@ class TestReplay(unittest.TestCase):
             self.assertEqual(rep["parsed_events"], 2)
             self.assertEqual(rep["skipped_lines"], 1)
 
+    def test_replay_uses_latest_valid_context_workspace_before_failure(self):
+        with tempfile.TemporaryDirectory() as td:
+            j = Path(td) / "events.jsonl"
+            entries = [
+                {
+                    "kind": "context_workspace_tool_evidence",
+                    "payload": {
+                        "tool": "file_read",
+                        "action_ready": True,
+                        "workspace": {
+                            "items": [
+                                {"type": "observed_user_request", "observed": True, "verified": True},
+                            ]
+                        },
+                    },
+                },
+                {
+                    "kind": "context_workspace_tool_evidence",
+                    "payload": {
+                        "tool": "file_write",
+                        "action_ready": False,
+                        "workspace": {"items": "not a list"},
+                    },
+                },
+                {"kind": "deny", "payload": {"risk": 0.9}},
+            ]
+            j.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n", encoding="utf-8")
+
+            rep = replay_last_failure(str(j))
+
+            self.assertEqual(rep["latest_context_workspace"]["tool"], "file_read")
+            self.assertTrue(rep["latest_context_workspace"]["action_ready"])
+            self.assertEqual(rep["latest_context_workspace"]["summary"]["items"], 1)
+            self.assertEqual(rep["latest_context_workspace"]["summary"]["item_types"], ["observed_user_request"])
+
     def test_format_replay_report_renders_context_workspace_for_humans(self):
         report = {
             "ok": True,

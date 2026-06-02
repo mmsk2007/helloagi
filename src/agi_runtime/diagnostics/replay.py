@@ -11,8 +11,10 @@ def _summarize_context_workspace(event: dict | None) -> dict | None:
     if not event:
         return None
     payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
-    workspace = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else {}
-    items = workspace.get("items") if isinstance(workspace.get("items"), list) else []
+    workspace = payload.get("workspace") if isinstance(payload.get("workspace"), dict) else None
+    if workspace is None or not isinstance(workspace.get("items"), list):
+        return None
+    items = workspace["items"]
     item_types = sorted({str(item.get("type")) for item in items if isinstance(item, dict) and item.get("type")})
     observed = 0
     generated = 0
@@ -154,7 +156,7 @@ def replay_last_failure(
         if previous_input is None and events[i].get("kind") == "input":
             previous_input = events[i]
         if latest_context_workspace is None and events[i].get("kind") == CONTEXT_WORKSPACE_KIND:
-            latest_context_workspace = events[i]
+            latest_context_workspace = _summarize_context_workspace(events[i])
         if previous_input is not None and latest_context_workspace is not None:
             break
 
@@ -163,7 +165,7 @@ def replay_last_failure(
         "failure_kind": failure.get("kind"),
         "failure": failure,
         "previous_input": previous_input,
-        "latest_context_workspace": _summarize_context_workspace(latest_context_workspace),
+        "latest_context_workspace": latest_context_workspace,
         "context": context,
         "parsed_events": len(events),
         "skipped_lines": skipped_lines,
