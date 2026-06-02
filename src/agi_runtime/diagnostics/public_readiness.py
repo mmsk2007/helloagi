@@ -45,6 +45,18 @@ _REQUIRED_DOCS = [
     "docs/production-checklist.md",
 ]
 
+_ORGANISM_ARCHITECTURE_TERMS = {
+    "brain": ["brain", "cortex", "context unrolling", "verifier"],
+    "nervous": ["nervous", "event", "trace"],
+    "senses": ["senses", "channels", "cli", "api"],
+    "effectors": ["effectors", "muscles", "tools", "action"],
+    "immune": ["immune", "srg", "approval", "governance"],
+    "memory": ["memory", "hippocampus", "skill"],
+    "metabolism": ["metabolism", "budget", "rate", "cost"],
+    "homeostasis": ["homeostasis", "health", "degraded", "recovery"],
+    "growth": ["growth", "crystallization", "benchmark", "scorecard"],
+}
+
 _PRIVATE_TEXT_PATTERNS = [
     r"TELEGRAM_BOT_TOKEN\s*=\s*\S+",
     r"OPENAI_(API_KEY|AUTH_TOKEN)\s*=\s*\S+",
@@ -196,6 +208,30 @@ def run_public_readiness(repo_path: str | os.PathLike[str] = ".", *, require_cle
         not missing_docs,
         "all required public docs present" if not missing_docs else "missing: " + ", ".join(missing_docs),
         "Add or restore the missing docs before publishing." if missing_docs else "",
+    ))
+
+    organism_doc = git_root / "docs" / "organism-architecture.md"
+    organism_plan = git_root / "docs" / "plans" / "bioagent-organism-intelligence-phases.md"
+    organism_missing: list[str] = []
+    if not organism_doc.is_file():
+        organism_missing.append("docs/organism-architecture.md")
+    if not organism_plan.is_file():
+        organism_missing.append("docs/plans/bioagent-organism-intelligence-phases.md")
+    missing_organs: list[str] = []
+    if organism_doc.is_file():
+        organism_text = organism_doc.read_text(encoding="utf-8", errors="replace").lower()
+        missing_organs = [organ for organ, terms in _ORGANISM_ARCHITECTURE_TERMS.items() if not any(term in organism_text for term in terms)]
+    organism_ok = not organism_missing and not missing_organs
+    organism_detail = "organ-system architecture docs present and mapped"
+    if organism_missing:
+        organism_detail = "missing: " + ", ".join(organism_missing)
+    elif missing_organs:
+        organism_detail = "missing organ coverage: " + ", ".join(missing_organs)
+    checks.append(PublicReadinessCheck(
+        "organism_architecture",
+        organism_ok,
+        organism_detail,
+        "Add the organism architecture doc/plan and map every organ system to implemented or planned modules." if not organism_ok else "",
     ))
 
     tracked_runtime = _tracked_runtime_artifacts(git_root)

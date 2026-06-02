@@ -1,5 +1,10 @@
 # Architecture
 
+HelloAGI's architecture is now tracked through two complementary lenses:
+
+- The concrete runtime/module map below.
+- The BioAgent organ-system map in `docs/organism-architecture.md`, which separates implemented, partial, and planned responsibilities for the brain/cortex, nervous system, senses, effectors, immune system, memory, metabolism, circulatory spine, homeostasis, and growth system.
+
 ## Runtime loop
 1. Input arrives
 2. Governance gate evaluates risk and policy posture

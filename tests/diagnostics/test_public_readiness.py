@@ -40,8 +40,10 @@ class TestPublicReadiness(unittest.TestCase):
             "docs/streaming-contract.md",
             "docs/providers.md",
             "docs/reminders-scheduling.md",
+            "docs/organism-architecture.md",
+            "docs/plans/bioagent-organism-intelligence-phases.md",
         ]:
-            self._write(repo, doc, "TelegramStreamConsumer HELLOAGI_TELEGRAM_GROUP_MODE providers.py memory/ reminders runs export /remind\n")
+            self._write(repo, doc, "TelegramStreamConsumer HELLOAGI_TELEGRAM_GROUP_MODE providers.py memory/ reminders runs export /remind brain cortex nervous senses effectors immune metabolism homeostasis growth scorecard\n")
         self._write(repo, "src/agi_runtime/channels/telegram.py", "HELLOAGI_TELEGRAM_GROUP_MODE TelegramStreamConsumer\n")
         self._write(repo, "src/agi_runtime/service/manager.py", "service/manager.py\n")
         self._write(repo, "src/agi_runtime/config/providers.py", "providers.py\n")
@@ -91,6 +93,19 @@ class TestPublicReadiness(unittest.TestCase):
 
             self.assertFalse(report["ready"])
             self.assertIn("public_docs", report["blockers"])
+
+    def test_public_readiness_reports_missing_organism_architecture(self):
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            self._init_repo(repo)
+            (repo / "docs" / "organism-architecture.md").unlink()
+            self._git(repo, "add", "-u")
+            self._git(repo, "commit", "-m", "remove organism architecture")
+
+            report = run_public_readiness(repo)
+
+            self.assertFalse(report["ready"])
+            self.assertIn("organism_architecture", report["blockers"])
 
     def test_public_readiness_flags_secret_like_filenames(self):
         with tempfile.TemporaryDirectory() as td:
