@@ -83,11 +83,12 @@ class ContextPrimitive:
 class ContextWorkspace:
     """Shared typed context workspace used before answering or acting."""
 
-    def __init__(self, goal: str, inputs: Iterable[Any] | None = None) -> None:
+    def __init__(self, goal: str, inputs: Iterable[Any] | None = None, trace_id: str | None = None) -> None:
         if not goal:
             raise ValueError("goal is required")
         self.goal = goal
         self.inputs = list(inputs or [])
+        self.trace_id = trace_id or f"trace_{uuid4().hex[:12]}"
         self._items: list[WorkspaceItem] = []
 
     @property

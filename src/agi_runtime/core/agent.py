@@ -22,6 +22,7 @@ import shutil
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
+from uuid import uuid4
 
 from agi_runtime.governance.memory_guard import MemoryGuard
 from agi_runtime.governance.output_guard import OutputGuard
@@ -36,6 +37,7 @@ from agi_runtime.config.providers import (
 )
 from agi_runtime.config.settings import RuntimeSettings
 from agi_runtime.context_unrolling import ActionReadiness, ContextWorkspace, evaluate_action_readiness
+from agi_runtime.events import EventSpine
 from agi_runtime.tools.registry import (
     ToolRegistry,
     ToolResult,
@@ -139,6 +141,7 @@ class HelloAGIAgent:
         )
         self.principals = PrincipalProfileStore()
         self.journal = Journal(self.settings.journal_path)
+        self.event_spine = EventSpine()
         self.srg_adapter = SRGAdapter(
             governor=self.governor,
             output_guard=self.output_guard,
@@ -1472,6 +1475,8 @@ class HelloAGIAgent:
 
     async def _think_async(self, user_input: str) -> AgentResponse:
         """The full agentic loop — the beating heart of HelloAGI."""
+        turn_trace_id = f"trace_{uuid4().hex[:12]}"
+        self.event_spine.record_agent_turn_start(trace_id=turn_trace_id, input_present=bool(user_input))
         principal_id = self.current_principal()
         profile_principal_id = self.current_profile_principal()
         self.principals.record_user_message(profile_principal_id, user_input)
@@ -1499,12 +1504,14 @@ class HelloAGIAgent:
         if gov.decision == "deny":
             msg = gov.safe_alternative or "I can't help with unsafe or boundary-violating requests."
             self.journal.write("deny", {"risk": gov.risk, "reasons": gov.reasons})
+            self.event_spine.record_agent_turn_end(trace_id=turn_trace_id, success=True)
             return AgentResponse(text=msg, decision=gov.decision, risk=gov.risk)
 
         # 3. Check ALE cache for known intent
         cached = self.ale.get(user_input)
         if cached:
             self.journal.write("cache_hit", {"text": cached[:200]})
+            self.event_spine.record_agent_turn_end(trace_id=turn_trace_id, success=True)
             return AgentResponse(text=cached, decision=gov.decision, risk=gov.risk)
 
         # 3b. Cognitive routing.
@@ -1531,6 +1538,7 @@ class HelloAGIAgent:
         # 4. No usable LLM backbone (see HELLOAGI_LLM_PROVIDER + API keys)
         if self._llm_provider is None:
             text = self._template_response(user_input, gov)
+            self.event_spine.record_agent_turn_end(trace_id=turn_trace_id, success=True)
             return AgentResponse(text=text, decision=gov.decision, risk=gov.risk)
 
         # 5. Agentic loop (Claude or Gemini)
@@ -1598,7 +1606,11 @@ class HelloAGIAgent:
                     failure_reason=response.failure_reason,
                 )
                 self.cognitive_router.observe_outcome(council_trace.fingerprint)
+            self.event_spine.record_agent_turn_end(trace_id=turn_trace_id, success=response.success)
             return response
+        except Exception:
+            self.event_spine.record_agent_turn_end(trace_id=turn_trace_id, success=False)
+            raise
         finally:
             self._think_soft_deadline = None
             self._active_expert_overrides = None

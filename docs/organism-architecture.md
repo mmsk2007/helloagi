@@ -22,11 +22,12 @@ See also: `docs/plans/bioagent-organism-intelligence-phases.md`.
 **Purpose:** Move observations, decisions, interrupts, approvals, progress, and action results between organs with traceable IDs.
 
 **Current modules:**
-- `src/agi_runtime/core/agent.py` — turn lifecycle.
+- `src/agi_runtime/core/agent.py` — turn lifecycle and in-memory turn start/end event emission.
+- `src/agi_runtime/events.py` — typed in-memory event spine helpers.
 - `src/agi_runtime/diagnostics/replay.py` — replayable event/diagnostic support.
 - `memory/events.jsonl` in local runtime checkouts — runtime journal; not public source state.
 
-**Status:** Planned/partial. The organism plan's next major runtime step is a typed event spine with `trace_id`, provenance, confidence, and verified state.
+**Status:** Partial. A public-safe in-memory `OrganEvent` spine now exists for traceable turn/context signals; future work should broaden emitters and connect the spine to richer diagnostics without leaking runtime state.
 
 ### Senses
 
@@ -90,9 +91,10 @@ See also: `docs/plans/bioagent-organism-intelligence-phases.md`.
 
 **Current modules:**
 - Existing journal/replay diagnostics provide a foundation.
-- No stable public `OrganEvent` API yet.
+- `src/agi_runtime/events.py` defines `OrganEvent` and `EventSpine` for JSON-safe in-memory event flow.
+- `helloagi context-plan` emits a local context-plan event and shows the trace ID/event count.
 
-**Status:** Planned. Phase 1 of the BioAgent plan introduces the typed event spine.
+**Status:** Partial. Phase 1 has started with a typed in-memory spine; persistence and broader organ emitters remain planned.
 
 ### Homeostasis
 

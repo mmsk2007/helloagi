@@ -557,6 +557,7 @@ def tools_info(policy_pack: str = "safe-default") -> str:
 
 
 def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
+    from agi_runtime.events import EventSpine
     from agi_runtime.context_unrolling import (
         ContextPrimitive,
         ContextUnrollingController,
@@ -647,6 +648,10 @@ def context_plan(goal: str, task_type: str, max_primitives: int = 3) -> str:
     if has_pytest_collection:
         lines.append("pytest_collection_note: static Python-test check; parameterized brackets are counted at the base node")
     readiness = evaluate_action_readiness(workspace, risk="high")
+    event_spine = EventSpine()
+    event_spine.record_context_plan(workspace, provenance="cli:context-plan")
+    lines.append(f"trace_id: {workspace.trace_id}")
+    lines.append(f"event_spine_events: {len(event_spine.read(trace_id=workspace.trace_id))}")
     lines.append(f"action_gate: {readiness.summary}")
     if readiness.required_evidence:
         lines.append(f"action_gate_required_evidence: {', '.join(readiness.required_evidence)}")
