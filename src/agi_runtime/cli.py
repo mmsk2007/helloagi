@@ -500,10 +500,10 @@ def doctor_score(config_path: str, onboard_path: str):
 
 
 def health(config_path: str, onboard_path: str):
-    from agi_runtime.diagnostics.health import run_health
+    from agi_runtime.diagnostics.health import format_health_report, run_health
 
     rep = run_health(config_path=config_path, onboard_path=onboard_path)
-    print(rep)
+    print(format_health_report(rep))
 
 
 def replay_failure(config_path: str):

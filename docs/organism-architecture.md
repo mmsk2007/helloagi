@@ -101,12 +101,13 @@ See also: `docs/plans/bioagent-organism-intelligence-phases.md`.
 **Purpose:** Keep the organism stable: health checks, degraded mode, stall detection, safe-mode recommendations, and recovery.
 
 **Current modules/docs:**
+- `src/agi_runtime/diagnostics/health.py` — organism-level health categories and safe-mode recommendations.
 - `src/agi_runtime/diagnostics/public_readiness.py` — public release readiness.
 - `src/agi_runtime/service/manager.py` — service doctor/status behavior.
 - `docs/cognitive-runtime.md` — stall detection design.
 - `docs/troubleshooting.md` — user recovery paths.
 
-**Status:** Partial. Health checks exist; next improvements should map health categories to organ systems and recommend safe degraded modes.
+**Status:** Partial. `helloagi health` now maps runtime state to organ categories and reports safe degraded-mode recommendations; future work should deepen service/channel recovery probes and richer automatic recovery.
 
 ### Growth System
 

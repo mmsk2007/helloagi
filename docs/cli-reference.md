@@ -13,7 +13,7 @@
 ## Service and health
 
 - `helloagi doctor`
-- `helloagi health`
+- `helloagi health` — render organism-level health categories (brain, senses, effectors, immune, memory, metabolism, channels, homeostasis, growth) plus safe-mode recommendations when action-required organs prevent normal operation
 - `helloagi serve --require-auth`
 - `helloagi service install [--telegram] [--discord] [--extension <name>] [--workdir <path>]`
 - `helloagi service start`
