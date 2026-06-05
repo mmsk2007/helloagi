@@ -90,12 +90,59 @@ def _safe_mode_from_organs(organ_health: dict[str, dict[str, str]]) -> dict:
     }
 
 
+def _provider_recovery_hint(provider: str, state: dict) -> str:
+    if state.get("llm_usable"):
+        return ""
+    auth_mode = state.get("auth_mode")
+    env_name = state.get("env_name")
+    if state.get("configured"):
+        if provider == "openai" and state.get("source") == "openai_codex_oauth":
+            return "Codex OAuth is configured for the Codex adapter, not the OpenAI SDK; use `helloagi models set-provider codex` or set OPENAI_API_KEY."
+        if auth_mode == "api_key" and env_name:
+            return f"Configured credential is not usable for the LLM backbone; set a real {env_name} or choose another provider."
+        return "Configured credential is not usable for the LLM backbone; refresh it or choose another provider."
+    if provider == "anthropic":
+        return "Set ANTHROPIC_API_KEY or activate an Anthropic auth profile."
+    if provider == "google":
+        return "Set GOOGLE_API_KEY or activate a Google auth profile."
+    if provider == "openai":
+        return "Set OPENAI_API_KEY, run `helloagi auth login-openai`, or select the Codex adapter if using Codex OAuth."
+    return "Configure provider credentials, then rerun `helloagi health`."
+
+
+def _build_provider_health(providers: dict[str, dict[str, object]]) -> dict[str, dict[str, object]]:
+    provider_health: dict[str, dict[str, object]] = {}
+    for provider, state in providers.items():
+        provider_health[provider] = {
+            "configured": bool(state.get("configured")),
+            "usable": bool(state.get("llm_usable")),
+            "auth_mode": state.get("auth_mode", "none"),
+            "source": state.get("source", "none"),
+            "env_name": state.get("env_name"),
+            "profile_name": state.get("profile_name"),
+            "secret_present": bool(state.get("configured")),
+            "recovery_hint": _provider_recovery_hint(provider, state),
+        }
+    return provider_health
+
+
 def format_health_report(report: dict) -> str:
     lines = ["HelloAGI organism health:"]
     for organ, state in report.get("organ_health", {}).items():
         lines.append(f"- {organ}: {state['status']} — {state['summary']}")
         if state.get("recommendation"):
             lines.append(f"  next: {state['recommendation']}")
+    provider_health = report.get("provider_health", {})
+    if provider_health:
+        lines.append("provider_status:")
+        for provider, state in provider_health.items():
+            configured = "configured" if state.get("configured") else "not configured"
+            usable = "usable" if state.get("usable") else "not usable"
+            auth_mode = state.get("auth_mode") or "none"
+            source = state.get("source") or "none"
+            lines.append(f"- {provider}: {configured} / {usable} (auth_mode={auth_mode}, source={source})")
+            if state.get("recovery_hint"):
+                lines.append(f"  next: {state['recovery_hint']}")
     safe_mode = report.get("safe_mode", {})
     state = "active" if safe_mode.get("active") else "inactive"
     lines.append(f"safe_mode: {state}")
@@ -137,10 +184,12 @@ def run_health(config_path: str = "helloagi.json", onboard_path: str = "helloagi
         value is False for key, value in checks.items() if key in {"config_exists", "db_exists", "journal_exists"}
     )
     organ_health = _build_organ_health(checks=checks, providers=providers, service=service, extensions=extensions)
+    provider_health = _build_provider_health(providers)
     return {
         "ok": overall_ok,
         "checks": checks,
         "organ_health": organ_health,
+        "provider_health": provider_health,
         "safe_mode": _safe_mode_from_organs(organ_health),
         "scorecard": scorecard,
         "service": service,
