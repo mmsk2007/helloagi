@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from agi_runtime.auth.profiles import AuthProfileManager
 from agi_runtime.config.env import resolve_env_value
@@ -126,6 +127,46 @@ def _build_provider_health(providers: dict[str, dict[str, object]]) -> dict[str,
     return provider_health
 
 
+def _build_channel_health(extension_manager: ExtensionManager) -> dict[str, dict[str, object]]:
+    channel_health: dict[str, dict[str, object]] = {}
+    for status in extension_manager.list_extensions(category="channel"):
+        recovery_hint = extension_manager.readiness_hint(status.name, status=status) if not status.available else ""
+        channel_health[status.name] = {
+            "enabled": status.enabled,
+            "available": status.available,
+            "missing_env": list(status.missing_env),
+            "missing_modules": list(status.missing_modules),
+            "recovery_hint": recovery_hint,
+        }
+    return channel_health
+
+
+def _build_service_recovery(service_manager: ServiceManager) -> dict[str, object]:
+    doctor = service_manager.doctor()
+
+    def redact(value: object) -> str:
+        text = str(value)
+        # Health output is user-facing and may be copied into bug reports; keep
+        # recovery actions but remove machine-specific absolute paths. Handle
+        # quoted/backticked paths and parenthesized interpreter paths first so
+        # paths with spaces do not leak suffixes.
+        text = re.sub(r"`[^`]*(?:/|\\)[^`]*`", "`<path>`", text)
+        text = re.sub(r"\"[^\"]*(?:/|\\)[^\"]*\"", '"<path>"', text)
+        text = re.sub(r"'[^']*(?:/|\\)[^']*'", "'<path>'", text)
+        text = re.sub(r"\([^)]*(?:/|\\)[^)]*\)", "(<path>)", text)
+        text = re.sub(r"(?<!\w)(?:[A-Za-z]:\\|/)[^\s`)]+", "<path>", text)
+        return text
+
+    return {
+        "ok": bool(doctor.get("ok")),
+        "installed": bool(doctor.get("installed")),
+        "issues": [redact(item) for item in doctor.get("issues", [])],
+        "recommendations": [redact(item) for item in doctor.get("recommendations", [])],
+        "notes": [redact(item) for item in doctor.get("notes", [])],
+        "backend": doctor.get("backend", "none"),
+    }
+
+
 def format_health_report(report: dict) -> str:
     lines = ["HelloAGI organism health:"]
     for organ, state in report.get("organ_health", {}).items():
@@ -141,6 +182,28 @@ def format_health_report(report: dict) -> str:
             auth_mode = state.get("auth_mode") or "none"
             source = state.get("source") or "none"
             lines.append(f"- {provider}: {configured} / {usable} (auth_mode={auth_mode}, source={source})")
+            if state.get("recovery_hint"):
+                lines.append(f"  next: {state['recovery_hint']}")
+    service_recovery = report.get("service_recovery", {})
+    if service_recovery:
+        service_state = "ok" if service_recovery.get("ok") else "needs attention"
+        issues = ", ".join(service_recovery.get("issues", [])) or "none"
+        lines.append(f"service_recovery: {service_state} (issues={issues})")
+        for recommendation in service_recovery.get("recommendations", []):
+            lines.append(f"  next: {recommendation}")
+        for note in service_recovery.get("notes", []):
+            lines.append(f"  note: {note}")
+    channel_health = report.get("channel_health", {})
+    if channel_health:
+        lines.append("channel_status:")
+        for channel, state in channel_health.items():
+            enabled = "enabled" if state.get("enabled") else "not enabled"
+            available = "available" if state.get("available") else "not available"
+            lines.append(f"- {channel}: {enabled} / {available}")
+            if state.get("missing_env"):
+                lines.append(f"  missing_env: {', '.join(state['missing_env'])}")
+            if state.get("missing_modules"):
+                lines.append(f"  missing_modules: {', '.join(state['missing_modules'])}")
             if state.get("recovery_hint"):
                 lines.append(f"  next: {state['recovery_hint']}")
     safe_mode = report.get("safe_mode", {})
@@ -159,12 +222,14 @@ def run_health(config_path: str = "helloagi.json", onboard_path: str = "helloagi
     env_path = str(runtime_root / ".env")
     auth_profiles_path = str(runtime_root / "memory" / "auth_profiles.json")
     scorecard = run_scorecard(config_path=config_path, onboard_path=onboard_path)
-    service = ServiceManager().status()
-    extensions = ExtensionManager().doctor()
+    service_manager = ServiceManager()
+    extension_manager = ExtensionManager()
+    service = service_manager.status()
+    extensions = extension_manager.doctor()
     auth_profiles = AuthProfileManager(path=auth_profiles_path, env_path=env_path).doctor()
     providers = provider_env_snapshot(env_path=env_path, auth_profiles_path=auth_profiles_path)
-    telegram_status = ExtensionManager().status("telegram")
-    discord_status = ExtensionManager().status("discord")
+    telegram_status = extension_manager.status("telegram")
+    discord_status = extension_manager.status("discord")
     checks = {
         "config_exists": Path(config_path).exists(),
         "onboard_exists": Path(onboard_path).exists(),
@@ -185,11 +250,15 @@ def run_health(config_path: str = "helloagi.json", onboard_path: str = "helloagi
     )
     organ_health = _build_organ_health(checks=checks, providers=providers, service=service, extensions=extensions)
     provider_health = _build_provider_health(providers)
+    service_recovery = _build_service_recovery(service_manager)
+    channel_health = _build_channel_health(extension_manager)
     return {
         "ok": overall_ok,
         "checks": checks,
         "organ_health": organ_health,
         "provider_health": provider_health,
+        "service_recovery": service_recovery,
+        "channel_health": channel_health,
         "safe_mode": _safe_mode_from_organs(organ_health),
         "scorecard": scorecard,
         "service": service,
