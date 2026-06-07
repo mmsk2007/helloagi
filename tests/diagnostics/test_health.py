@@ -59,6 +59,36 @@ def test_health_marks_brain_ok_when_any_provider_is_llm_usable(tmp_path, monkeyp
     assert report["safe_mode"]["active"] is False
 
 
+def test_health_safe_mode_declares_diagnostics_only_runtime_policy(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    for name in (
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_AUTH_TOKEN",
+        "GOOGLE_API_KEY",
+        "GOOGLE_AUTH_TOKEN",
+        "OPENAI_API_KEY",
+        "OPENAI_AUTH_TOKEN",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HELLOAGI_OPENAI_OAUTH_DISABLE", "1")
+    save_settings(RuntimeSettings(), "helloagi.json")
+
+    report = run_health(config_path="helloagi.json", onboard_path="helloagi.onboard.json")
+
+    safe_mode = report["safe_mode"]
+    assert safe_mode["active"] is True
+    assert safe_mode["enforced"] is True
+    assert "health" in safe_mode["allowed_commands"]
+    assert "doctor" in safe_mode["allowed_commands"]
+    assert "auto" in safe_mode["blocked_runtime_actions"]
+    assert "serve" not in safe_mode["blocked_runtime_actions"]
+    assert "diagnostics-only" in safe_mode["recommendation"]
+
+    rendered = format_health_report(report)
+    assert "safe_mode_allowed_commands: health, doctor" in rendered
+    assert "safe_mode_blocked_actions: auto" in rendered
+
+
 def test_health_reports_provider_configured_vs_usable_and_recovery_hints(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     for name in (

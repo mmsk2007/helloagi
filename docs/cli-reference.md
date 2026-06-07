@@ -13,7 +13,7 @@
 ## Service and health
 
 - `helloagi doctor`
-- `helloagi health` — render organism-level health categories (brain, senses, effectors, immune, memory, metabolism, channels, homeostasis, growth), provider configured-vs-usable status with secret-redacted recovery hints, service doctor recovery issues/recommendations, channel extension readiness with missing env/module hints, plus safe-mode recommendations when action-required organs prevent normal operation
+- `helloagi health` — render organism-level health categories (brain, senses, effectors, immune, memory, metabolism, channels, homeostasis, growth), provider configured-vs-usable status with secret-redacted recovery hints, service doctor recovery issues/recommendations, channel extension readiness with missing env/module hints, plus enforced diagnostics-only safe-mode guidance when action-required organs prevent normal operation; `helloagi auto` refuses autonomous steps while that safe mode is active
 - `helloagi serve --require-auth`
 - `helloagi service install [--telegram] [--discord] [--extension <name>] [--workdir <path>]`
 - `helloagi service start`

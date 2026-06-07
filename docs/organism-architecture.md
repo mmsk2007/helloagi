@@ -107,7 +107,7 @@ See also: `docs/plans/bioagent-organism-intelligence-phases.md`.
 - `docs/cognitive-runtime.md` — stall detection design.
 - `docs/troubleshooting.md` — user recovery paths.
 
-**Status:** Partial. `helloagi health` now maps runtime state to organ categories, reports provider configured-vs-usable details with secret-redacted recovery hints, includes service doctor recovery issues/recommendations, renders channel extension readiness with missing env/module hints, and includes safe degraded-mode recommendations; future work should deepen richer automatic recovery and make safe mode active rather than advisory.
+**Status:** Partial. `helloagi health` now maps runtime state to organ categories, reports provider configured-vs-usable details with secret-redacted recovery hints, includes service doctor recovery issues/recommendations, renders channel extension readiness with missing env/module hints, and includes safe degraded-mode recommendations. Safe mode now exposes a diagnostics-only policy and `helloagi auto` refuses autonomous steps while critical organs are action-required; future work should deepen richer automatic recovery and expand active safe-mode enforcement across more long-running runtime surfaces.
 
 ### Growth System
 

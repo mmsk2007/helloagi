@@ -412,6 +412,16 @@ def oneshot(message: str, config_path: str, policy_pack: str = "safe-default"):
 def auto(goal: str, steps: int, config_path: str, policy_pack: str = "safe-default"):
     from agi_runtime.autonomy.loop import AutonomousLoop
     from agi_runtime.core.agent import HelloAGIAgent
+    from agi_runtime.diagnostics.health import run_health
+
+    health_report = run_health(config_path=config_path)
+    safe_mode = health_report.get("safe_mode", {})
+    if safe_mode.get("active") and "auto" in safe_mode.get("blocked_runtime_actions", []):
+        print("Safe mode active: autonomous runtime actions are blocked until critical organs recover.")
+        print(f"critical_organs: {', '.join(safe_mode.get('critical_organs', []))}")
+        print(f"recommendation: {safe_mode.get('recommendation', '')}")
+        print("Next: run `helloagi health`, `helloagi doctor`, or onboarding/provider configuration commands.")
+        raise SystemExit(2)
 
     settings = load_settings(config_path)
     agent = HelloAGIAgent(settings, policy_pack=policy_pack)

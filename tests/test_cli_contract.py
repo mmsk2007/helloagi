@@ -143,6 +143,47 @@ class TestCLIContract(unittest.TestCase):
                 os.environ["TELEGRAM_BOT_TOKEN"] = old
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_auto_honors_safe_mode_when_critical_organs_missing(self):
+        tmp = _make_scratch_dir()
+        env = os.environ.copy()
+        for name in (
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "GOOGLE_API_KEY",
+            "GOOGLE_AUTH_TOKEN",
+            "OPENAI_API_KEY",
+            "OPENAI_AUTH_TOKEN",
+        ):
+            env.pop(name, None)
+        env["HELLOAGI_OPENAI_OAUTH_DISABLE"] = "1"
+        try:
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "agi_runtime.cli",
+                    "auto",
+                    "--goal",
+                    "do one autonomous step",
+                    "--steps",
+                    "1",
+                    "--config",
+                    str(tmp / "helloagi.json"),
+                ],
+                cwd=ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("safe mode", result.stdout.lower())
+        self.assertIn("diagnostics-only", result.stdout)
+        self.assertIn("helloagi health", result.stdout)
+
     def test_service_help_exposes_extension_flag(self):
         result = self.run_cli("service", "install", "--help")
         self.assertEqual(result.returncode, 0, result.stderr)

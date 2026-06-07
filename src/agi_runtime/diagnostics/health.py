@@ -80,12 +80,18 @@ def _safe_mode_from_organs(organ_health: dict[str, dict[str, str]]) -> dict:
         for organ in ("brain", "memory", "homeostasis")
         if organ_health[organ]["status"] == "action_required"
     ]
+    active = bool(critical_organs)
+    allowed_commands = ["health", "doctor", "onboard", "models", "auth", "extensions", "service doctor", "readiness"]
+    blocked_runtime_actions = ["auto"]
     return {
-        "active": bool(critical_organs),
+        "active": active,
+        "enforced": active,
         "critical_organs": critical_organs,
+        "allowed_commands": allowed_commands if active else [],
+        "blocked_runtime_actions": blocked_runtime_actions if active else [],
         "recommendation": (
-            "Use CLI diagnostics and configuration commands only until action-required organs are fixed."
-            if critical_organs
+            "Safe mode is diagnostics-only: use CLI diagnostics/configuration commands until action-required organs are fixed."
+            if active
             else "No safe-mode recommendation needed."
         ),
     }
@@ -213,6 +219,10 @@ def format_health_report(report: dict) -> str:
         lines.append(f"critical_organs: {', '.join(safe_mode['critical_organs'])}")
     if safe_mode.get("recommendation"):
         lines.append(f"safe_mode_recommendation: {safe_mode['recommendation']}")
+    if safe_mode.get("allowed_commands"):
+        lines.append(f"safe_mode_allowed_commands: {', '.join(safe_mode['allowed_commands'])}")
+    if safe_mode.get("blocked_runtime_actions"):
+        lines.append(f"safe_mode_blocked_actions: {', '.join(safe_mode['blocked_runtime_actions'])}")
     return "\n".join(lines)
 
 
